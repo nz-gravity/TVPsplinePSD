@@ -1,0 +1,191 @@
+"""Tang-style zigzag moving periodogram + thinned dynamic Whittle.
+
+Faithful to the construction of Tang et al. (the ``beyondWhittle`` dynamic
+Whittle): a moving periodogram ordinate is formed from a centred ``2m+1``-point
+window and evaluated at a single Fourier frequency ``lambda_{mod(t)}`` that
+*cycles (zigzags)* with the time index,
+
+    MI_t = |sum_{nu=0}^{2m} X_{nu+t-m} exp(-i pi nu lambda_{mod(t)})|^2
+           / (2 pi (2m+1)),   lambda_j = 2j/(2m+1),  mod(t) = 1 + ((t-1) mod m).
+
+The thinned variant keeps blocks of ``m`` ordinates (one per frequency) spaced by
+``i*m`` to reduce correlation. The resulting *scattered* ``(u, omega)`` ordinates
+are fit with the SAME whitened tensor-product P-spline prior used for WDM, under
+the exponential (dynamic) Whittle likelihood ``MI ~ Exp(1/f)``. Only the
+time-frequency representation differs from the WDM estimator.
+"""
+
+from __future__ import annotations
+
+import jax.numpy as jnp
+import numpy as np
+import numpyro
+import numpyro.distributions as dist
+from jax import random
+from numpyro.infer import MCMC, NUTS, init_to_value
+
+from .config import PSplineConfig
+from .model import _sample_log_gamma, whiten_penalty_pair, whitened_init_values
+from .splines import (
+    create_bspline_basis,
+    create_bspline_roughness_penalty,
+    evaluate_bspline_basis,
+)
+
+
+def tang_moving_periodogram(
+    data: np.ndarray, *, m: int, thin: int = 2
+) -> dict[str, np.ndarray]:
+    """Thinned zigzag moving-periodogram ordinates (Tang et al.).
+
+    Args:
+        data: Real time series of length ``T``.
+        m: Order (window half-width; window length ``2m+1``, ``m`` frequencies).
+        thin: Thinning factor ``i`` (2 or 3); blocks are spaced by ``i*m``.
+
+    Returns:
+        Dict with scattered arrays ``u`` (rescaled time in ``(0,1)``), ``omega``
+        (angular frequency in ``(0, pi)``), and ``mi`` (the ordinates).
+    """
+    x = np.asarray(data, dtype=float)
+    T = x.size
+    n_blocks = (T - 2 * m) // (thin * m)
+    if n_blocks < 1:
+        raise ValueError("Series too short for these (m, thin).")
+
+    nu = np.arange(2 * m + 1)
+    j = np.arange(1, m + 1)
+    lam = 2.0 * j / (2 * m + 1)        # Fourier frequencies in (0, 1)
+    omega = np.pi * lam               # angular frequency in (0, pi)
+    phase = np.exp(-1j * np.pi * np.outer(nu, lam))  # (2m+1, m)
+
+    u_list, omega_list, mi_list = [], [], []
+    for block in range(n_blocks):
+        for jj in range(1, m + 1):
+            t = m + thin * block * m + jj          # 1-based centre, window valid
+            window = x[t - m - 1 : t + m]          # X_{t-m}..X_{t+m}, length 2m+1
+            coeff = np.sum(window * phase[:, jj - 1])
+            mi_list.append((np.abs(coeff) ** 2) / (2.0 * np.pi * (2 * m + 1)))
+            u_list.append(t / T)
+            omega_list.append(omega[jj - 1])
+    return {
+        "u": np.asarray(u_list),
+        "omega": np.asarray(omega_list),
+        "mi": np.asarray(mi_list),
+    }
+
+
+def _scattered_pls_init(mi, B_time, B_freq, P_time, P_freq, config):
+    """Penalized least-squares warm start on scattered log-ordinates."""
+    n_t, n_f = B_time.shape[1], B_freq.shape[1]
+    floor = max(1e-8, 0.05 * np.percentile(mi, 10.0))
+    target = np.log(mi + floor)
+    # design[p, s*n_t + r] = B_freq[p, s] * B_time[p, r]   (matches vec_F(W))
+    design = (B_freq[:, :, None] * B_time[:, None, :]).reshape(mi.size, n_f * n_t)
+    kron_time = np.kron(np.eye(n_f), P_time)
+    kron_freq = np.kron(P_freq, np.eye(n_t))
+    system = (
+        design.T @ design
+        + config.init_penalty_time * kron_time
+        + config.init_penalty_freq * kron_freq
+        + config.ridge_eps * np.eye(design.shape[1])
+    )
+    w = np.linalg.solve(system, design.T @ target)
+    W = w.reshape((n_t, n_f), order="F")
+    phi_time = max(1e-2, w.size / (float(w @ kron_time @ w) + 1e-6))
+    phi_freq = max(1e-2, w.size / (float(w @ kron_freq @ w) + 1e-6))
+    return {"W": W, "phi_time": phi_time, "phi_freq": phi_freq}
+
+
+def _dynamic_whittle_model(mi, basis_eig_time, basis_eig_freq, lam_time, lam_freq,
+                           joint_null, config):
+    n_t, n_f = basis_eig_time.shape[1], basis_eig_freq.shape[1]
+    phi_time = _sample_log_gamma("phi_time", config.alpha_phi, config.beta_phi,
+                                 config.phi_log_base_scale)
+    phi_freq = _sample_log_gamma("phi_freq", config.alpha_phi, config.beta_phi,
+                                 config.phi_log_base_scale)
+    d = phi_time * lam_time[:, None] + phi_freq * lam_freq[None, :]
+    scale = jnp.where(joint_null, 1.0 / jnp.sqrt(config.null_precision),
+                      1.0 / jnp.sqrt(d + config.ridge_eps))
+    with numpyro.plate("eig_plate", n_t * n_f):
+        s_flat = numpyro.sample("s", dist.Normal(0.0, 1.0))
+    eig_coeffs = s_flat.reshape((n_t, n_f)) * scale
+    # Scattered evaluation: log f at each ordinate's own (u_p, omega_p).
+    log_f = jnp.sum((basis_eig_time @ eig_coeffs) * basis_eig_freq, axis=1)
+    log_like = jnp.sum(-(log_f + mi * jnp.exp(-log_f)))
+    numpyro.factor("dynamic_whittle", log_like)
+    numpyro.deterministic("eig_coeffs", eig_coeffs)
+
+
+def run_tang_dynamic_whittle_mcmc(
+    data: np.ndarray,
+    *,
+    dt: float,
+    m: int,
+    thin: int = 2,
+    config: PSplineConfig,
+    n_time_grid: int = 60,
+    n_warmup: int = 250,
+    n_samples: int = 300,
+    num_chains: int = 1,
+    random_seed: int = 7,
+) -> dict[str, object]:
+    """Fit the thinned dynamic-Whittle model and evaluate the PSD on a grid."""
+    ordinates = tang_moving_periodogram(data, m=m, thin=thin)
+    u, omega, mi = ordinates["u"], ordinates["omega"], ordinates["mi"]
+    freq_unit = omega / np.pi  # in (0, 1)
+
+    B_time, knots_time = create_bspline_basis(
+        u, config.n_interior_knots_time, degree=config.degree_time
+    )
+    B_freq, knots_freq = create_bspline_basis(
+        freq_unit, config.n_interior_knots_freq, degree=config.degree_freq
+    )
+    P_time = create_bspline_roughness_penalty(
+        knots_time, degree=config.degree_time, derivative_order=config.diff_order_time
+    )
+    P_freq = create_bspline_roughness_penalty(
+        knots_freq, degree=config.degree_freq, derivative_order=config.diff_order_freq
+    )
+    whitened = whiten_penalty_pair(P_time, P_freq)
+    basis_eig_time = B_time @ whitened["U_time"]
+    basis_eig_freq = B_freq @ whitened["U_freq"]
+
+    pls_init = _scattered_pls_init(mi, B_time, B_freq, P_time, P_freq, config)
+    init_sites = whitened_init_values(pls_init, whitened, config)
+
+    kernel = NUTS(
+        _dynamic_whittle_model,
+        init_strategy=init_to_value(values=init_sites),
+        max_tree_depth=10, target_accept_prob=0.85,
+    )
+    mcmc = MCMC(kernel, num_warmup=n_warmup, num_samples=n_samples,
+                num_chains=num_chains, chain_method="sequential", progress_bar=False)
+    mcmc.run(
+        random.PRNGKey(random_seed),
+        jnp.asarray(mi), jnp.asarray(basis_eig_time), jnp.asarray(basis_eig_freq),
+        jnp.asarray(whitened["lam_time"]), jnp.asarray(whitened["lam_freq"]),
+        jnp.asarray(whitened["joint_null"]), config,
+        extra_fields=("diverging",),
+    )
+
+    # Evaluate the posterior PSD on a regular (u, omega) grid for comparison.
+    eig_samples = np.asarray(mcmc.get_samples()["eig_coeffs"])  # (n, K_t, K_f)
+    dense_u = np.linspace(u.min(), u.max(), n_time_grid)
+    omega_grid = np.unique(omega)                       # the m Fourier frequencies
+    freq_grid_hz = omega_grid / (2.0 * np.pi * dt)
+    BUt = evaluate_bspline_basis(dense_u, knots_time, degree=config.degree_time) @ whitened["U_time"]
+    BUf = evaluate_bspline_basis(omega_grid / np.pi, knots_freq, degree=config.degree_freq) @ whitened["U_freq"]
+    log_psd_grid = np.einsum("ta,nab,fb->ntf", BUt, eig_samples, BUf)
+
+    return {
+        "mcmc": mcmc,
+        "ordinates": ordinates,
+        "time_grid": dense_u,
+        "freq_grid": freq_grid_hz,
+        "omega_grid": omega_grid,
+        "psd_mean": np.exp(np.mean(log_psd_grid, axis=0)),
+        "psd_lower": np.exp(np.percentile(log_psd_grid, 5.0, axis=0)),
+        "psd_upper": np.exp(np.percentile(log_psd_grid, 95.0, axis=0)),
+        "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
+    }
