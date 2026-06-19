@@ -12,7 +12,6 @@
 \usepackage{bm}
 \usepackage{graphicx}
 \usepackage{amsthm}
-\usepackage{algorithm}
 \usepackage{algorithmic}
 \usepackage{hyperref}
 
@@ -237,12 +236,9 @@ mass-matrix adaptation during warmup. Each chain is initialized from a penalized
 least-squares fit of $\bm{\Lambda}$ to the log of the local-power data, mapped
 into the whitened coordinates; the WDM and moving-periodogram front ends use the
 same warm-start procedure on their respective local-power statistics.
-Algorithm~\ref{alg:psd} summarizes a single likelihood evaluation.
+Figure~\ref{alg:psd} summarizes a single likelihood evaluation.
 
-\begin{algorithm}[t]
-\caption{Whitened tensor-product log-P-spline PSD model (one likelihood
-evaluation)}
-\label{alg:psd}
+\begin{figure}[t]
 \begin{algorithmic}
 \STATE \textbf{Sample smoothing precisions (log scale):}
 $\log\phi_t,\ \log\phi_f$, with $\phi_t,\phi_f\sim\mathrm{Gamma}(\alpha_\phi,\beta_\phi)$
@@ -254,7 +250,10 @@ $\bm{\Lambda} = (\mathbf{B}_t\mathbf{U}_t)\,\mathbf{Z}\,(\mathbf{B}_f\mathbf{U}_
 \STATE \textbf{Evaluate observation-model log-likelihood:}
 $\mathcal{L}(\bm{\Lambda})$ \COMMENT{moving periodogram or WDM; Sec.~\ref{sec:obs}}
 \end{algorithmic}
-\end{algorithm}
+\caption{Algorithm: whitened tensor-product log-P-spline PSD model (one
+likelihood evaluation).}
+\label{alg:psd}
+\end{figure}
 
 % =====================================================================
 \section{Observation models}
