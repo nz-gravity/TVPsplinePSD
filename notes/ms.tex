@@ -11,6 +11,9 @@
 \usepackage{algorithmic}
 \usepackage{xcolor}
 
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+
 \newcommand{\avi}[1]{\textcolor{teal}{[Avi: #1]}}
 
 
@@ -102,7 +105,7 @@ X_{\,\nu + t - m}\,
 \exp\!\left(-i \pi \nu \lambda_{\mathrm{mod}(t)}\right)
 \]
 
-Let $ \tilde{h}(\lambda|\theta))$ be the frequency representation of the GW signal.
+Let $\tilde{h}(\lambda \mid \theta)$ be the frequency representation of the GW signal.
 \begin{definition}[Dynamic Whittle likelihood]
 The \emph{dynamic Whittle likelihood} based on the moving periodogram ordinates is defined by
 \begin{equation}
@@ -111,7 +114,7 @@ L^{(1)}_{\mathrm{DW}}(f,\theta)
 \prod_{t = 1}^{T}
 \frac{1}{f(t/T, \lambda_{\mathrm{mod}(t)})}
 \exp\!\left(
--\frac{(\tilde{X}_t(\lambda_{\mathrm{mod}(t)}) - \tilde{h}(\lambda_{\mathrm{mod}(t)})|\theta))^2}{f(t/T, \lambda_{\mathrm{mod}(t)})}
+-\frac{\left(\tilde{X}_t(\lambda_{\mathrm{mod}(t)}) - \tilde{h}(\lambda_{\mathrm{mod}(t)} \mid \theta)\right)^2}{f(t/T, \lambda_{\mathrm{mod}(t)})}
 \right).
 %\label{eq:dynamic_whittle}
 \end{equation}
