@@ -227,14 +227,17 @@ def run_gibbs_signal_noise_mcmc(
     lam_freq = jnp.asarray(whitened["lam_freq"])
     joint_null = jnp.asarray(whitened["joint_null"])
 
-    # Warm starts: penalized-LS surface from the raw power, linear amplitudes from
-    # least squares of the templates against the data.
-    pls_init = initialize_with_penalized_least_squares(
-        coeffs**2, B_time, B_freq, P_time, P_freq, config)
-    noise_init = whitened_init_values(pls_init, whitened, config)
+    # Warm starts: linear amplitudes from least squares of the templates against
+    # the data, then the penalized-LS noise surface from the *signal-subtracted*
+    # power. Initialising the noise from the raw (signal-inclusive) power inflates
+    # the floor in the source's channel and biases the amplitude low.
     template_mat = templates.reshape(templates.shape[0], -1).T
     beta_init, *_ = np.linalg.lstsq(template_mat, coeffs.reshape(-1), rcond=None)
     beta_state = np.asarray(beta_init, dtype=float)
+    resid_init = coeffs - np.tensordot(beta_state, templates, axes=1)
+    pls_init = initialize_with_penalized_least_squares(
+        resid_init**2, B_time, B_freq, P_time, P_freq, config)
+    noise_init = whitened_init_values(pls_init, whitened, config)
 
     noise_kernel = NUTS(
         pspline_surface_model, max_tree_depth=max_tree_depth,
@@ -433,8 +436,13 @@ def run_gibbs_stft_signal_noise_mcmc(
     coeffs_j = jnp.asarray(coeffs)
     templates_j = jnp.asarray(templates)
 
-    # Warm start the noise block from the per-component mean power of the data.
-    power = np.sum(coeffs**2, axis=0) / coeffs.shape[0]
+    # Warm start: linear amplitudes from least squares, then the noise block from
+    # the per-component mean power of the *signal-subtracted* data (the raw power
+    # would inflate the floor in the source's channel and bias the amplitude low).
+    template_mat = templates.reshape(n_templates, -1).T
+    beta_init, *_ = np.linalg.lstsq(template_mat, coeffs.reshape(-1), rcond=None)
+    resid_init = coeffs - np.tensordot(np.asarray(beta_init, dtype=float), templates, axes=1)
+    power = np.sum(resid_init**2, axis=0) / coeffs.shape[0]
     pls_init = initialize_with_penalized_least_squares(
         power, B_time, B_freq, P_time, P_freq, config
     )
@@ -461,7 +469,7 @@ def run_gibbs_stft_signal_noise_mcmc(
     log_psd_samples: list[np.ndarray] = []
     divergences = 0
 
-    beta_state = np.zeros(n_templates)
+    beta_state = np.asarray(beta_init, dtype=float)
     noise_state = {k: np.asarray(v) for k, v in noise_init.items()}
 
     for sweep in range(n_sweeps):
