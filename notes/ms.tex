@@ -188,15 +188,14 @@ precisions \citep{lang2004bayesian,maturana2021bayesian,boer2023tensor}.
 
 \paragraph{Whitened (non-centered) parameterization.}
 Sampling $\mathbf{w}$ jointly with $(\phi_t,\phi_f)$ produces the classic
-hierarchical funnel: the conditional scale of $\mathbf{w}$ collapses as the
-precisions grow, which during gradient-based MCMC manifests as vanishing
-gradients and runs that saturate the maximum tree depth. We remove this by
-sampling in the eigenbasis of the marginal penalties. With the eigendecompositions
-$\mathbf{P}_t = \mathbf{U}_t\,\mathrm{diag}(\lambda^t)\,\mathbf{U}_t^\top$ and
-$\mathbf{P}_f = \mathbf{U}_f\,\mathrm{diag}(\lambda^f)\,\mathbf{U}_f^\top$, the
-two Kronecker terms are simultaneously diagonalized by $\mathbf{U}_f\otimes\mathbf{U}_t$,
-so $\mathbf{Q}$ has eigenvalues $d_{ab} = \phi_t\lambda^t_a + \phi_f\lambda^f_b$.
-We sample standard-normal eigen-coefficients $s_{ab}\sim\mathcal{N}(0,1)$ and set
+hierarchical funnel -- the conditional scale of $\mathbf{w}$ collapses as the
+precisions grow, stalling gradient-based MCMC. We remove it by sampling in the
+penalty eigenbasis. With $\mathbf{P}_t = \mathbf{U}_t\,\mathrm{diag}(\lambda^t)\,
+\mathbf{U}_t^\top$ and $\mathbf{P}_f = \mathbf{U}_f\,\mathrm{diag}(\lambda^f)\,
+\mathbf{U}_f^\top$, the Kronecker terms are simultaneously diagonalized by
+$\mathbf{U}_f\otimes\mathbf{U}_t$, so $\mathbf{Q}$ has eigenvalues
+$d_{ab} = \phi_t\lambda^t_a + \phi_f\lambda^f_b$. We sample standard-normal
+$s_{ab}\sim\mathcal{N}(0,1)$ and set
 \begin{equation}
 \mathbf{W} = \mathbf{U}_t\,\mathbf{Z}\,\mathbf{U}_f^\top,
 \qquad
@@ -204,11 +203,10 @@ Z_{ab} = \frac{s_{ab}}{\sqrt{d_{ab}}},
 \label{eq:whitening}
 \end{equation}
 which reproduces $\mathcal{N}(\mathbf{0},\mathbf{Q}^{-1})$ exactly while making
-$s$ \emph{a priori} independent of $(\phi_t,\phi_f)$. The change of variables
-absorbs the $|\mathbf{Q}|^{1/2}$ normalization, so no explicit penalty
-determinant is needed. The shared null space of the two penalties (bilinear
-polynomials in $t,f$, where $d_{ab}=0$) carries no smoothing information and is
-assigned a fixed weak precision $\tau_0$.
+$s$ \emph{a priori} independent of $(\phi_t,\phi_f)$ and absorbing the
+$|\mathbf{Q}|^{1/2}$ normalization. The shared penalty null space (bilinear
+trends in $t,f$, $d_{ab}=0$) carries no smoothing information and gets a fixed
+weak precision $\tau_0$.
 
 \paragraph{Hyperpriors.}
 Each smoothing precision is given a Gamma hyperprior
@@ -492,29 +490,18 @@ x(t) = x_{\mathrm{inst}}(t) + m(u)\,x_{\mathrm{gal}}(t),
 \qquad
 S(u,f) = S_{\mathrm{inst}}(f) + m(u)^2\,S_{\mathrm{gal}}(f),
 \end{equation}
-with $u = t/T_{\mathrm{obs}}$ the rescaled time. The instrument and confusion
-PSDs $S_{\mathrm{inst}}(f)$ and $S_{\mathrm{gal}}(f)$ are the analytic
-Robson--Cornish--Liu fits~\citep{cornish2020Wavelets}, and $m(u)$ is a
-slowly varying seasonal envelope (a raised cosine of the antenna-pattern cycle)
-normalized to $\langle m^2\rangle = 1$ so that the modulation redistributes
-confusion power in time without changing its time average. Both noise components
-are drawn as independent coloured Gaussian realizations matching their one-sided
-PSDs; because they are independent and $m$ varies slowly, $S(u,f)$ is exactly the
-WDM local power the estimator targets.
-
-For a physically consistent signal-plus-noise problem the binary and the noise
-share a single convention. The instrument noise PSD is taken from
-\texttt{lisatools} (model \texttt{scirdv1}) and the binary waveform from
-\texttt{jaxGB}, both in the TDI-X channel, TDI generation~2, and fractional-
-frequency units; mixing TDI generations would mis-scale the signal-to-noise ratio
-by a large frequency-dependent factor. We verify the convention by recovering the
-same matched-filter SNR from the time-domain and frequency-domain
-representations. A single resolvable binary is injected at $f_0 = 1.5\,\mathrm{mHz}$
-(zero $\dot f_0$) at an SNR of order ten against the confusion-dominated floor.
-\todo{Confirm the final injected SNR, observation duration $T_{\mathrm{obs}}$,
-sampling $\Delta t$, and WDM grid dimensions $(n_t \times n_f)$ used for the
-production run (the demo uses a short $768$-sample series on a $24$-bin WDM grid;
-a full-year run with one physical annual modulation cycle is the target).}
+with $u = t/T_{\mathrm{obs}}$ the rescaled time, $S_{\mathrm{inst}}$ and
+$S_{\mathrm{gal}}$ the analytic Robson--Cornish--Liu
+fits~\citep{cornish2020Wavelets}, and $m(u)$ a slowly varying seasonal envelope
+normalized to $\langle m^2\rangle = 1$. Since the components are independent and
+$m$ varies slowly, $S(u,f)$ is exactly the local power the estimator targets.
+The binary waveform (\texttt{jaxGB}) and the instrument noise (\texttt{lisatools})
+share the TDI-X, generation-2, fractional-frequency convention, so the
+matched-filter SNR is physical. A resolvable binary is injected at
+$f_0 = 1.5\,\mathrm{mHz}$.
+\todo{Fix the final injected SNR, $T_{\mathrm{obs}}$, $\Delta t$, and WDM grid
+for the production run (demo: $768$ samples, $24$ time bins; target: a full year
+with one annual cycle).}
 
 \subsection{Blocked Gibbs inference with NUTS sub-kernels}
 \label{sec:gibbs}
@@ -533,22 +520,15 @@ Section~\ref{sec:model};
 $\bm{\Lambda}$, update the source parameters $\bm\theta$ with a separate NUTS
 kernel.
 \end{enumerate}
-Blocking is deliberate: the smooth, high-dimensional PSD coefficients and the
-low-dimensional, strongly non-Gaussian (multimodal in frequency) source
-parameters have very different posterior geometries, so a single joint sampler
-must compromise on one shared mass matrix and step size. Updating each block with
-its own adapted NUTS kernel lets the two adapt independently while the Gibbs
-sweep couples them through the conditioning.
-This scheme is implemented in \texttt{run\_gibbs\_signal\_noise\_mcmc}: each
-sweep runs a short, warm-started NUTS update of the noise block on the residual
-coefficients followed by a NUTS update of the amplitude block at the fixed noise
-surface, with the first sweeps discarded as burn-in.
+Blocking is deliberate: the high-dimensional smooth PSD coefficients and the
+low-dimensional, multimodal source parameters have very different geometries, so
+each block's NUTS kernel can adapt independently while the Gibbs sweep couples
+them. Each sweep warm-starts from the previous one and discards the first sweeps
+as burn-in (\texttt{run\_gibbs\_signal\_noise\_mcmc}).
 \todo{The source block currently samples the two linear quadrature amplitudes at
-fixed binary frequency, recovering the signal amplitude (below). Extending it to
-the full nonlinear GB parameter vector $\bm\theta = (f_0, \dot f_0, A, \ldots)$,
-including a frequency search, is future work; the blocked Gibbs structure is
-unchanged. Specify the final per-block warmup, sweep count, and cross-sweep
-convergence diagnostics once tuned.}
+fixed binary frequency; extending it to the full $\bm\theta = (f_0, \dot f_0, A,
+\ldots)$ with a frequency search is future work (the blocked structure is
+unchanged). Fix per-block warmup, sweep count, and cross-sweep diagnostics.}
 
 \subsection{Stationary baseline}
 We compare against a stationary PSD model fitted with the stationary Whittle

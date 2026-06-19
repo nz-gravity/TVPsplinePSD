@@ -81,12 +81,15 @@ WDM-coefficient units via a per-channel white-noise calibration
 The figures used in `notes/ms.tex` are regenerated into `notes/figures/` by:
 
 ```bash
-python notes/scripts/make_ls2_figures.py          # ls2_surface_example, ls2_error_distribution
-python notes/scripts/make_lisa_figures.py         # lisa_true_surface, lisa_surface_comparison, lisa_modulation_channel
-python notes/scripts/make_convergence_figure.py   # convergence (posterior contraction vs data size)
-python notes/scripts/make_baseline_comparison.py  # baseline_comparison (WDM vs STFT, single duration)
-python notes/scripts/make_duration_comparison.py  # duration_comparison (WDM vs STFT across durations)
-python notes/scripts/make_lisa_signal_demo.py     # joint galactic-binary + noise fit (global-fit demo)
+# Simulation study (Section 4)
+python notes/scripts/make_sim_study_figures.py        # sim_three_panel, sim_mse_coverage
+
+# LISA demonstration (Section 5)
+python notes/scripts/make_lisa_figures.py             # lisa_surface_comparison (data + estimated PSD surface)
+python notes/scripts/make_lisa_tdi_signal_demo.py     # lisa_tdi_decomposition (signal/noise/residual)
+python notes/scripts/make_lisa_gibbs_demo.py          # lisa_gibbs_psd_bias (stationarity bias in GB channel)
+python notes/scripts/make_lisa_representation_comparison.py  # lisa_representation_comparison (WDM/STFT)
+python studies/lisa_gb/make_corner.py                 # lisa_gb_stationary_corner (GB posteriors)
 ```
 
 ## Joint signal + noise (global fit)
@@ -102,7 +105,6 @@ log-P-spline) instead absorbs the signal and the time-varying confusion power an
 biases the PSD high. Demos:
 
 ```bash
-python notes/scripts/make_lisa_signal_demo.py       # lightweight: analytic chirp GB (no extra deps)
 python notes/scripts/make_lisa_tdi_signal_demo.py   # realistic: jaxGB TDI signal + lisatools noise (joint NUTS)
 python notes/scripts/make_lisa_gibbs_demo.py        # realistic: blocked-Gibbs joint fit vs stationary baseline
 ```
