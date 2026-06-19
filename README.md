@@ -92,13 +92,19 @@ python notes/scripts/make_lisa_signal_demo.py     # joint galactic-binary + nois
 ## Joint signal + noise (global fit)
 
 The Gaussian coefficient likelihood admits a signal mean, `c ~ N(h(θ), S)`, so a
-signal and the non-stationary noise PSD can be inferred jointly via
-`run_joint_signal_noise_mcmc`. A noise-only fit instead absorbs the signal and
-biases the PSD high. Two demos:
+signal and the non-stationary noise PSD can be inferred jointly. Two samplers are
+provided: `run_joint_signal_noise_mcmc` samples both with a single NUTS
+trajectory, while `run_gibbs_signal_noise_mcmc` runs a blocked **Metropolis-
+within-Gibbs** scheme — a NUTS update of the noise PSD alternating with a NUTS
+update of the signal amplitudes, each block adapting independently. A noise-only
+or **stationary** fit (`run_stationary_psd_mcmc`, a time-invariant 1D
+log-P-spline) instead absorbs the signal and the time-varying confusion power and
+biases the PSD high. Demos:
 
 ```bash
 python notes/scripts/make_lisa_signal_demo.py       # lightweight: analytic chirp GB (no extra deps)
-python notes/scripts/make_lisa_tdi_signal_demo.py   # realistic: jaxGB TDI signal + lisatools noise
+python notes/scripts/make_lisa_tdi_signal_demo.py   # realistic: jaxGB TDI signal + lisatools noise (joint NUTS)
+python notes/scripts/make_lisa_gibbs_demo.py        # realistic: blocked-Gibbs joint fit vs stationary baseline
 ```
 
 The realistic demo needs the `[lisa]` extra (`uv pip install -e '.[lisa]'`:
