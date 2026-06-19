@@ -1,0 +1,53 @@
+name: Build Manuscript PDF
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - notes/**
+      - .github/workflows/latex-pdf.yml
+  pull_request:
+    paths:
+      - notes/**
+      - .github/workflows/latex-pdf.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build-pdf:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build manuscript PDF
+        uses: xu-cheng/latex-action@v3
+        with:
+          root_file: ms.tex
+          working_directory: notes
+          latexmk_use_xelatex: false
+
+      - name: Stage PDF for branch publish
+        if: github.event_name == 'push'
+        run: |
+          mkdir pdf-branch
+          cp notes/ms.pdf pdf-branch/ms.pdf
+
+      - name: Publish PDF branch
+        if: github.event_name == 'push'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: manuscript-pdf
+          publish_dir: ./pdf-branch
+          force_orphan: true
+
+      - name: Upload PDF artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: manuscript-pdf
+          path: notes/ms.pdf

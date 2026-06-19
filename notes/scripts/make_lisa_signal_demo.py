@@ -26,7 +26,7 @@ from datasets import (
     true_psd_lisa,
     wdm_white_noise_calibration,
 )
-from wdm_psd import (
+from tv_pspline_psd import (
     PSplineConfig,
     fit_log_pspline_surface,
     run_joint_signal_noise_mcmc,

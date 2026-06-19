@@ -22,7 +22,7 @@ import numpy as np
 from scipy.signal import welch
 
 from datasets.lisa_noise6a import load_noise6a_aet
-from wdm_psd import PSplineConfig, run_wdm_psd_mcmc, save_figure
+from tv_pspline_psd import PSplineConfig, run_wdm_psd_mcmc, save_figure
 
 FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
 H5 = os.getenv("NOISE6A_H5",

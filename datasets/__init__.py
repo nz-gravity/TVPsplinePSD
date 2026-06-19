@@ -2,7 +2,7 @@
 
 These modules are intentionally decoupled from the estimator: each simulator
 returns a raw time series (and an analytic true PSD), with no dependence on the
-spline machinery in :mod:`wdm_psd`.
+spline machinery in :mod:`tv_pspline_psd`.
 """
 
 from __future__ import annotations

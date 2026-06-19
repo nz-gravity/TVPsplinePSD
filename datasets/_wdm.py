@@ -7,7 +7,7 @@ from typing import Callable
 import numpy as np
 from wdm_transform import TimeSeries
 
-from wdm_psd import PSplineConfig
+from tv_pspline_psd import PSplineConfig
 
 
 def trimmed_keep_indices(

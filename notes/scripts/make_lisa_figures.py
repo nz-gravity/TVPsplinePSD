@@ -22,7 +22,7 @@ from datasets import (
     true_psd_lisa,
     wdm_white_noise_calibration,
 )
-from wdm_psd import (
+from tv_pspline_psd import (
     PSplineConfig,
     interval_coverage,
     mse_log_psd,

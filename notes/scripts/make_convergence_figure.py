@@ -29,7 +29,7 @@ from datasets import (
     trimmed_keep_indices,
     wdm_white_noise_calibration,
 )
-from wdm_psd import (
+from tv_pspline_psd import (
     PSplineConfig,
     mse_log_psd,
     run_wdm_psd_mcmc,

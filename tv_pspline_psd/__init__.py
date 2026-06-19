@@ -2,8 +2,8 @@
 
 The estimator fits a smooth ``log S(t, f)`` surface to squared WDM coefficients
 with a WDM Whittle likelihood (``w_nm ~ N(0, S_nm)``) and a non-centered
-(whitened) anisotropic P-spline prior. See :mod:`wdm_psd.model` for the prior
-construction and :func:`wdm_psd.run_wdm_psd_mcmc` for the entry point.
+(whitened) anisotropic P-spline prior. See :mod:`tv_pspline_psd.model` for the prior
+construction and :func:`tv_pspline_psd.run_wdm_psd_mcmc` for the entry point.
 """
 
 from __future__ import annotations

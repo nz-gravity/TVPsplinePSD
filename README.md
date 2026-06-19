@@ -1,4 +1,4 @@
-# wdm_psd
+# tv_pspline_psd
 
 Bayesian estimation of **non-stationary** noise power spectral densities from
 Wilson–Daubechies–Meyer (WDM) wavelet coefficients, using a tensor-product
@@ -15,7 +15,7 @@ to the time-frequency coefficients with a Gaussian Whittle likelihood
 representation-agnostic: `run_wdm_psd_mcmc` feeds it one real coefficient per
 cell (WDM), `run_stft_mcmc` feeds it the real and imaginary parts of a
 short-time Fourier coefficient (the moving periodogram) — same prior, same
-likelihood, different front end (`wdm_psd.fit_log_pspline_surface`). The prior is
+likelihood, different front end (`tv_pspline_psd.fit_log_pspline_surface`). The prior is
 sampled in a **non-centered (whitened)** form — standard-normal coefficients in
 the penalty eigenbasis, rescaled by `1/sqrt(phi_t λ_t + phi_f λ_f)` — which
 removes the `phi`-vs-weights funnel that otherwise causes vanishing gradients and
@@ -26,7 +26,7 @@ log scale with a `Gamma` hyperprior.
 
 | Path | Role |
 |------|------|
-| `wdm_psd/` | the estimator package (splines, prior/model, inference, metrics, plotting) |
+| `tv_pspline_psd/` | the estimator package (splines, prior/model, inference, metrics, plotting) |
 | `datasets/` | data generators, decoupled from the estimator (`ls2`, `lisa`) |
 | `studies/` | simulation studies (LS2 ×100, LISA confusion noise) |
 | `examples/` | minimal quickstart |
@@ -39,18 +39,18 @@ spline machinery.
 ## Install
 
 ```bash
-uv sync                  # installs deps and the wdm_psd + datasets packages
+uv sync                  # installs deps and the tv_pspline_psd + datasets packages
 # or: uv pip install -e .
 ```
 
 The package must be installed before running the scripts below: they import
-`wdm_psd` and `datasets` directly (no `sys.path` manipulation).
+`tv_pspline_psd` and `datasets` directly (no `sys.path` manipulation).
 
 ## Quickstart
 
 ```python
 import numpy as np
-from wdm_psd import PSplineConfig, run_wdm_psd_mcmc
+from tv_pspline_psd import PSplineConfig, run_wdm_psd_mcmc
 from datasets import simulate_ls2
 
 data = simulate_ls2(576, rng=np.random.default_rng(0))

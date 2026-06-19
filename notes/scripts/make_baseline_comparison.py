@@ -23,7 +23,7 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
 from datasets import simulate_ls2, true_psd_ls2, wdm_white_noise_calibration
-from wdm_psd import (
+from tv_pspline_psd import (
     PSplineConfig,
     run_tang_dynamic_whittle_mcmc,
     run_wdm_psd_mcmc,

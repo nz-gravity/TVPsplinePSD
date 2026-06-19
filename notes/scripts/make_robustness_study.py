@@ -25,7 +25,7 @@ import numpy as np
 from scipy import stats
 
 from datasets import simulate_ls2, true_psd_ls2, wdm_white_noise_calibration
-from wdm_psd import PSplineConfig, run_wdm_psd_mcmc, wdm_analysis_coefficients
+from tv_pspline_psd import PSplineConfig, run_wdm_psd_mcmc, wdm_analysis_coefficients
 
 FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
 DT, NT, N_TOTAL = 0.1, 24, 576

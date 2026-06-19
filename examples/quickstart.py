@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from datasets import monte_carlo_reference, simulate_ls2
-from wdm_psd import (
+from tv_pspline_psd import (
     PSplineConfig,
     plot_surface_comparison,
     relative_surface_error,

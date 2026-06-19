@@ -1,5 +1,5 @@
 [project]
-name = "wdm-psd"
+name = "tv_pspline_psd"
 version = "0.1.0"
 description = "Non-stationary noise PSD estimation with WDM tensor-product log-P-splines"
 readme = "README.md"
@@ -26,5 +26,10 @@ lisa = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
 [tool.hatch.build.targets.wheel]
-packages = ["wdm_psd", "datasets"]
+packages = ["tv_pspline_psd", "datasets"]
