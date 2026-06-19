@@ -14,25 +14,29 @@ import jax as _jax
 # numerical stability across the PSD dynamic range.
 _jax.config.update("jax_enable_x64", True)
 
-from .config import PSplineConfig
-from .diagnostics import summarize_mcmc_diagnostics
-from .inference import (
+# Submodule imports must follow the x64 config above (E402 is expected here).
+from .config import PSplineConfig  # noqa: E402
+from .diagnostics import summarize_mcmc_diagnostics  # noqa: E402
+from .inference import (  # noqa: E402
     evaluate_dense_posterior_mean,
     fit_log_pspline_surface,
     run_wdm_psd_mcmc,
     wdm_analysis_coefficients,
 )
-from .joint import (
+from .joint import (  # noqa: E402
     run_gibbs_signal_noise_mcmc,
     run_gibbs_stft_signal_noise_mcmc,
     run_joint_signal_noise_mcmc,
     run_multichannel_joint_mcmc,
 )
-from .moving_periodogram import run_tang_dynamic_whittle_mcmc, tang_moving_periodogram
-from .stationary import run_stationary_psd_mcmc
-from .metrics import interval_coverage, mse_log_psd, relative_surface_error
-from .plotting import plot_channel_slice, plot_surface_comparison, save_figure
-from .stft import moving_stft, run_stft_mcmc, stft_white_noise_calibration
+from .moving_periodogram import (  # noqa: E402
+    run_tang_dynamic_whittle_mcmc,
+    tang_moving_periodogram,
+)
+from .stationary import run_stationary_psd_mcmc  # noqa: E402
+from .metrics import interval_coverage, mse_log_psd, relative_surface_error  # noqa: E402
+from .plotting import plot_channel_slice, plot_surface_comparison, save_figure  # noqa: E402
+from .stft import moving_stft, run_stft_mcmc, stft_white_noise_calibration  # noqa: E402
 
 __all__ = [
     "PSplineConfig",

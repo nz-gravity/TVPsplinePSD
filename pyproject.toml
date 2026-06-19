@@ -22,6 +22,13 @@ lisa = [
     "pandas",
 ]
 
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint.per-file-ignores]
+# Figure-generation scripts favour compact, single-line plotting statements.
+"notes/scripts/*" = ["E402", "E702", "E731"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

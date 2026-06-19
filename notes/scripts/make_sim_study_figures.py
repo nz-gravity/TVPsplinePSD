@@ -78,12 +78,16 @@ def _metrics(res, cal, log_f0_common):
     # Coverage on the estimator's native grid against the calibrated truth.
     true_native = cal_b * true_psd_ls2(res["time_grid"], res["freq_grid"], DT)
     cov = interval_coverage(true_native, res["psd_lower"], res["psd_upper"])
-    return mse, cov
+    # Width of the 90% credible interval on log S (scale-free, comparable across
+    # representations), averaged over the grid.
+    ci_width = float(np.mean(np.log(res["psd_upper"] + 1e-30)
+                             - np.log(res["psd_lower"] + 1e-30)))
+    return mse, cov, ci_width
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repeats", type=int, default=20)
+    parser.add_argument("--repeats", type=int, default=100)
     args = parser.parse_args()
     FIG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -118,49 +122,71 @@ def main() -> None:
     plt.close(fig)
     print(f"Fig 1 saved (WDM div={rw0['divergences']}, MP div={rt0['divergences']})")
 
-    # --- Figure 2: MSE and coverage vs number of observations ---
-    durations, wdm_mse, tang_mse, wdm_cov, tang_cov = [], [], [], [], []
+    # --- Figure 2: MSE, coverage, and CI width vs number of observations ---
+    # Keep every repeat so we can show the spread (median + interquartile band).
+    durations = []
+    raw = {k: [] for k in ("wm", "tm", "wc", "tc", "ww", "tw")}  # per-N lists of arrays
     div_total = 0
     for nt in NT_VALUES:
         n_total = nt * NF
         cal_wdm = wdm_white_noise_calibration(n_total, DT, nt, WDM_CONFIG)
-        rep = {"wm": [], "tm": [], "wc": [], "tc": []}
+        rep = {k: [] for k in ("wm", "tm", "wc", "tc", "ww", "tw")}
         t0 = time.time()
         for r in range(args.repeats):
             seed = 6000 + r
             data = simulate_ls2(n_total, rng=np.random.default_rng(seed))
             rw, rt = _fit_both(data, nt, seed, cal_wdm, cal_tang)
             div_total += rw["divergences"] + rt["divergences"]
-            mw, cw = _metrics(rw, cal_wdm, log_f0_common)
-            mt, ct = _metrics(rt, cal_tang, log_f0_common)
+            mw, cw, ww = _metrics(rw, cal_wdm, log_f0_common)
+            mt, ct, wt = _metrics(rt, cal_tang, log_f0_common)
             rep["wm"].append(mw); rep["tm"].append(mt)
             rep["wc"].append(cw); rep["tc"].append(ct)
+            rep["ww"].append(ww); rep["tw"].append(wt)
         durations.append(n_total)
-        wdm_mse.append(np.median(rep["wm"])); tang_mse.append(np.median(rep["tm"]))
-        wdm_cov.append(np.mean(rep["wc"])); tang_cov.append(np.mean(rep["tc"]))
-        print(f"n={n_total:6d}  WDM mse={wdm_mse[-1]:.3f} cov={wdm_cov[-1]:.2f}  "
-              f"MP mse={tang_mse[-1]:.3f} cov={tang_cov[-1]:.2f}  ({time.time()-t0:.0f}s)")
-    print(f"total divergences: {div_total}")
+        for k in raw:
+            raw[k].append(np.asarray(rep[k]))
+        print(f"n={n_total:6d}  WDM mse={np.median(rep['wm']):.3f} "
+              f"cov={np.mean(rep['wc']):.2f} ciw={np.median(rep['ww']):.2f}  "
+              f"MP mse={np.median(rep['tm']):.3f} cov={np.mean(rep['tc']):.2f} "
+              f"ciw={np.median(rep['tw']):.2f}  ({time.time()-t0:.0f}s)")
+    print(f"total divergences: {div_total}  ({args.repeats} repeats/point)")
 
-    fig, (ax_m, ax_c) = plt.subplots(2, 1, figsize=(7, 7), sharex=True,
-                                     constrained_layout=True)
-    ax_m.loglog(durations, wdm_mse, "o-", color="tab:blue", lw=2.0, label="WDM")
-    ax_m.loglog(durations, tang_mse, "s--", color="tab:orange", lw=2.0,
-                label="Moving periodogram")
-    ax_m.set_ylabel(r"median $\mathrm{MSE}_{\log f}$")
+    durations = np.asarray(durations)
+    med = lambda key: np.array([np.median(a) for a in raw[key]])
+    q = lambda key, p: np.array([np.percentile(a, p) for a in raw[key]])
+
+    def _band(ax, key, color, marker, label):
+        ax.plot(durations, med(key), marker, color=color, lw=2.0, label=label)
+        ax.fill_between(durations, q(key, 25), q(key, 75), color=color, alpha=0.18)
+
+    fig, (ax_m, ax_c, ax_w) = plt.subplots(3, 1, figsize=(7, 9.5), sharex=True,
+                                           constrained_layout=True)
+    _band(ax_m, "wm", "tab:blue", "o-", "WDM")
+    _band(ax_m, "tm", "tab:orange", "s--", "Moving periodogram")
+    ax_m.set_xscale("log"); ax_m.set_yscale("log")
+    ax_m.set_ylabel(r"$\mathrm{MSE}_{\log f}$ (median, IQR)")
     ax_m.grid(True, which="both", alpha=0.3); ax_m.legend()
-    ax_c.semilogx(durations, wdm_cov, "o-", color="tab:blue", lw=2.0)
-    ax_c.semilogx(durations, tang_cov, "s--", color="tab:orange", lw=2.0)
+
+    ax_c.semilogx(durations, np.array([np.mean(a) for a in raw["wc"]]), "o-",
+                  color="tab:blue", lw=2.0)
+    ax_c.semilogx(durations, np.array([np.mean(a) for a in raw["tc"]]), "s--",
+                  color="tab:orange", lw=2.0)
     ax_c.axhline(0.9, ls=":", color="black", label="nominal 90%")
-    ax_c.set_ylim(0.0, 1.0)
-    ax_c.set_ylabel("90% coverage"); ax_c.set_xlabel("Number of observations $n$")
+    ax_c.set_ylim(0.0, 1.0); ax_c.set_ylabel("90% coverage")
     ax_c.grid(True, which="both", alpha=0.3); ax_c.legend()
+
+    _band(ax_w, "ww", "tab:blue", "o-", "WDM")
+    _band(ax_w, "tw", "tab:orange", "s--", "Moving periodogram")
+    ax_w.set_xscale("log"); ax_w.set_yscale("log")
+    ax_w.set_ylabel(r"90\% CI width on $\log S$ (median, IQR)")
+    ax_w.set_xlabel("Number of observations $n$")
+    ax_w.grid(True, which="both", alpha=0.3)
+
     fig.savefig(FIG_DIR / "sim_mse_coverage.png", dpi=160, bbox_inches="tight")
     plt.close(fig)
     np.savez(FIG_DIR / "sim_mse_coverage_metrics.npz",
-             n_total=np.asarray(durations), wdm_mse=np.asarray(wdm_mse),
-             tang_mse=np.asarray(tang_mse), wdm_cov=np.asarray(wdm_cov),
-             tang_cov=np.asarray(tang_cov))
+             n_total=durations, repeats=args.repeats,
+             **{f"{k}_samples": np.stack(raw[k]) for k in raw})
     print(f"Fig 2 saved to {FIG_DIR}")
 
 

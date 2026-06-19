@@ -26,7 +26,6 @@ import numpy as np
 from datasets import LISANoiseConfig
 from datasets.lisa_tdi import (
     gb_tdi_signal,
-    lisa_tdi_confusion_psd,
     lisa_tdi_noise_psd,
     simulate_tdi_noise,
     simulate_tv_lisa_tdi,
