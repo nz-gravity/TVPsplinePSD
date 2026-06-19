@@ -22,8 +22,13 @@ from .inference import (
     run_wdm_psd_mcmc,
     wdm_analysis_coefficients,
 )
-from .joint import run_joint_signal_noise_mcmc, run_multichannel_joint_mcmc
+from .joint import (
+    run_gibbs_signal_noise_mcmc,
+    run_joint_signal_noise_mcmc,
+    run_multichannel_joint_mcmc,
+)
 from .moving_periodogram import run_tang_dynamic_whittle_mcmc, tang_moving_periodogram
+from .stationary import run_stationary_psd_mcmc
 from .metrics import interval_coverage, mse_log_psd, relative_surface_error
 from .plotting import plot_channel_slice, plot_surface_comparison, save_figure
 from .stft import moving_stft, run_stft_mcmc, stft_white_noise_calibration
@@ -34,9 +39,11 @@ __all__ = [
     "wdm_analysis_coefficients",
     "run_wdm_psd_mcmc",
     "run_joint_signal_noise_mcmc",
+    "run_gibbs_signal_noise_mcmc",
     "run_multichannel_joint_mcmc",
     "run_tang_dynamic_whittle_mcmc",
     "tang_moving_periodogram",
+    "run_stationary_psd_mcmc",
     "run_stft_mcmc",
     "moving_stft",
     "stft_white_noise_calibration",
