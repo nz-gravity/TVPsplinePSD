@@ -14,6 +14,7 @@ from ._wdm import (
 )
 from .lisa import (
     LISANoiseConfig,
+    digman_cornish_power_modulation,
     galactic_modulation,
     lisa_galactic_confusion_psd,
     lisa_instrument_psd,
@@ -49,6 +50,7 @@ __all__ = [
     "lisa_instrument_psd",
     "lisa_galactic_confusion_psd",
     "galactic_modulation",
+    "digman_cornish_power_modulation",
     "normalization_constant",
     "monte_carlo_reference",
     "trimmed_keep_indices",

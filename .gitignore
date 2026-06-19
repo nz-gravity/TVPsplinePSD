@@ -39,3 +39,4 @@ tmp/
 
 
 out_tests/
+*.npz

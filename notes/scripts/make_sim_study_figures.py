@@ -31,8 +31,11 @@ from tv_pspline_psd import (
     interval_coverage,
     run_tang_dynamic_whittle_mcmc,
     run_wdm_psd_mcmc,
+    set_paper_style,
     tang_moving_periodogram,
 )
+
+set_paper_style()
 
 FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
 
@@ -85,11 +88,47 @@ def _metrics(res, cal, log_f0_common):
     return mse, cov, ci_width
 
 
+def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
+    """Render the MSE / coverage / CI-width vs. n figure from per-N samples."""
+    med = lambda key: np.array([np.median(a) for a in raw[key]])
+    q = lambda key, p: np.array([np.percentile(a, p) for a in raw[key]])
+
+    def _band(ax, key, color, marker, label):
+        ax.plot(durations, med(key), marker, color=color, label=label)
+        ax.fill_between(durations, q(key, 25), q(key, 75), color=color, alpha=0.18)
+
+    fig, (ax_m, ax_c, ax_w) = plt.subplots(3, 1, figsize=(6.5, 9.0), sharex=True,
+                                           constrained_layout=True)
+    _band(ax_m, "wm", "tab:blue", "o-", "WDM")
+    _band(ax_m, "tm", "tab:orange", "s--", "Moving periodogram")
+    ax_m.set_xscale("log"); ax_m.set_yscale("log")
+    ax_m.set_ylabel(r"$\mathrm{MSE}_{\log f}$ (median, IQR)")
+    ax_m.legend()
+
+    ax_c.semilogx(durations, np.array([np.mean(a) for a in raw["wc"]]), "o-", color="tab:blue")
+    ax_c.semilogx(durations, np.array([np.mean(a) for a in raw["tc"]]), "s--", color="tab:orange")
+    ax_c.axhline(0.9, ls=":", color="black", label="nominal 90\\%")
+    ax_c.set_ylim(0.0, 1.0); ax_c.set_ylabel("90\\% coverage"); ax_c.legend()
+
+    _band(ax_w, "ww", "tab:blue", "o-", "WDM")
+    _band(ax_w, "tw", "tab:orange", "s--", "Moving periodogram")
+    ax_w.set_xscale("log"); ax_w.set_yscale("log")
+    ax_w.set_ylabel(r"90\% CI width on $\log S$ (median, IQR)")
+    ax_w.set_xlabel("Number of observations $n$")
+
+    fig.savefig(FIG_DIR / "sim_mse_coverage.png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeats", type=int, default=100)
+    parser.add_argument("--render-only", action="store_true",
+                        help="Re-render Figure 2 from the saved metrics npz (no refits).")
     args = parser.parse_args()
     FIG_DIR.mkdir(parents=True, exist_ok=True)
+    metrics_path = FIG_DIR / "sim_mse_coverage_metrics.npz"
+    metric_keys = ("wm", "tm", "wc", "tc", "ww", "tw")
 
     log_f0_common = np.log(true_psd_ls2(U_COMMON, F_COMMON, DT) + 1e-12)
     cal_tang = _tang_calibration()
@@ -124,8 +163,16 @@ def main() -> None:
 
     # --- Figure 2: MSE, coverage, and CI width vs number of observations ---
     # Keep every repeat so we can show the spread (median + interquartile band).
+    if args.render_only:
+        cached = np.load(metrics_path)
+        durations = list(np.asarray(cached["n_total"]))
+        raw = {k: list(np.asarray(cached[f"{k}_samples"])) for k in metric_keys}
+        _render_metrics(np.asarray(durations), raw)
+        print(f"Fig 2 re-rendered from {metrics_path}")
+        return
+
     durations = []
-    raw = {k: [] for k in ("wm", "tm", "wc", "tc", "ww", "tw")}  # per-N lists of arrays
+    raw = {k: [] for k in metric_keys}  # per-N lists of arrays
     div_total = 0
     for nt in NT_VALUES:
         n_total = nt * NF
@@ -152,41 +199,9 @@ def main() -> None:
     print(f"total divergences: {div_total}  ({args.repeats} repeats/point)")
 
     durations = np.asarray(durations)
-    med = lambda key: np.array([np.median(a) for a in raw[key]])
-    q = lambda key, p: np.array([np.percentile(a, p) for a in raw[key]])
-
-    def _band(ax, key, color, marker, label):
-        ax.plot(durations, med(key), marker, color=color, lw=2.0, label=label)
-        ax.fill_between(durations, q(key, 25), q(key, 75), color=color, alpha=0.18)
-
-    fig, (ax_m, ax_c, ax_w) = plt.subplots(3, 1, figsize=(7, 9.5), sharex=True,
-                                           constrained_layout=True)
-    _band(ax_m, "wm", "tab:blue", "o-", "WDM")
-    _band(ax_m, "tm", "tab:orange", "s--", "Moving periodogram")
-    ax_m.set_xscale("log"); ax_m.set_yscale("log")
-    ax_m.set_ylabel(r"$\mathrm{MSE}_{\log f}$ (median, IQR)")
-    ax_m.grid(True, which="both", alpha=0.3); ax_m.legend()
-
-    ax_c.semilogx(durations, np.array([np.mean(a) for a in raw["wc"]]), "o-",
-                  color="tab:blue", lw=2.0)
-    ax_c.semilogx(durations, np.array([np.mean(a) for a in raw["tc"]]), "s--",
-                  color="tab:orange", lw=2.0)
-    ax_c.axhline(0.9, ls=":", color="black", label="nominal 90%")
-    ax_c.set_ylim(0.0, 1.0); ax_c.set_ylabel("90% coverage")
-    ax_c.grid(True, which="both", alpha=0.3); ax_c.legend()
-
-    _band(ax_w, "ww", "tab:blue", "o-", "WDM")
-    _band(ax_w, "tw", "tab:orange", "s--", "Moving periodogram")
-    ax_w.set_xscale("log"); ax_w.set_yscale("log")
-    ax_w.set_ylabel(r"90\% CI width on $\log S$ (median, IQR)")
-    ax_w.set_xlabel("Number of observations $n$")
-    ax_w.grid(True, which="both", alpha=0.3)
-
-    fig.savefig(FIG_DIR / "sim_mse_coverage.png", dpi=160, bbox_inches="tight")
-    plt.close(fig)
-    np.savez(FIG_DIR / "sim_mse_coverage_metrics.npz",
-             n_total=durations, repeats=args.repeats,
+    np.savez(metrics_path, n_total=durations, repeats=args.repeats,
              **{f"{k}_samples": np.stack(raw[k]) for k in raw})
+    _render_metrics(durations, raw)
     print(f"Fig 2 saved to {FIG_DIR}")
 
 

@@ -72,21 +72,32 @@ def main() -> None:
         print(f"[corner] {domain} done (div="
               f"{int(np.asarray(mcmc.get_extra_fields()['diverging']).sum())})")
 
+    # Recenter the circular phase on its posterior mean so the mode sits in the
+    # panel interior (avoids a spurious split at the +/- pi branch boundary).
+    all_phi = np.concatenate([posteriors["freq"]["phi0"], posteriors["wdm"]["phi0"]])
+    phi_center = float(np.arctan2(np.mean(np.sin(all_phi)), np.mean(np.cos(all_phi))))
+
+    def _recentre_phase(phi):
+        return phi_center + S.wrap_phase(phi - phi_center)
+
     # Stack into the displayed marginals (log10 f0, fdot/1e-15, log10 A, phi0).
     def _matrix(p):
         return np.column_stack([
             np.log10(p["f0"]),
             p["fdot"] / 1e-15,
             np.log10(p["A"]),
-            S.wrap_phase(p["phi0"]),
+            _recentre_phase(p["phi0"]),
         ])
 
     labels = [r"$\log_{10} f_0$", r"$\dot f\,/\,10^{-15}$", r"$\log_{10} A$", r"$\phi_0$"]
     truths = [np.log10(truth["f0"]), truth["fdot"] / 1e-15,
-              np.log10(truth["A"]), float(S.wrap_phase(truth["phi0"]))]
+              np.log10(truth["A"]), float(_recentre_phase(truth["phi0"]))]
 
     import corner
     import matplotlib.pyplot as plt
+
+    from tv_pspline_psd import set_paper_style
+    set_paper_style()
 
     fig = corner.corner(_matrix(posteriors["freq"]), labels=labels, truths=truths,
                         color="tab:blue", hist_kwargs={"density": True},

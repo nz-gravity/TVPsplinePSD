@@ -84,12 +84,12 @@ The figures used in `notes/ms.tex` are regenerated into `notes/figures/` by:
 # Simulation study (Section 4)
 python notes/scripts/make_sim_study_figures.py        # sim_three_panel, sim_mse_coverage
 
-# LISA demonstration (Section 5)
-python notes/scripts/make_lisa_figures.py             # lisa_surface_comparison (data + estimated PSD surface)
-python notes/scripts/make_lisa_tdi_signal_demo.py     # lisa_tdi_decomposition (signal/noise/residual)
-python notes/scripts/make_lisa_gibbs_demo.py          # lisa_gibbs_psd_bias (stationarity bias in GB channel)
-python notes/scripts/make_lisa_representation_comparison.py  # lisa_representation_comparison (WDM/STFT)
-python studies/lisa_gb/make_corner.py                 # lisa_gb_stationary_corner (GB posteriors)
+# LISA demonstration (Section 5): one annual realisation -> all four figures
+# (surface_comparison, tdi_decomposition, gibbs_psd_bias, representation_comparison)
+python notes/scripts/make_lisa_demo.py                # full one-year cyclostationary run
+python notes/scripts/make_lisa_demo.py --quick        # fast smoke configuration
+python notes/scripts/make_lisa_demo.py --render-only  # re-render figures from cached npz
+python studies/lisa_gb/make_corner.py --production    # lisa_gb_stationary_corner (GB posteriors)
 ```
 
 ## Joint signal + noise (global fit)
@@ -102,11 +102,10 @@ within-Gibbs** scheme — a NUTS update of the noise PSD alternating with a NUTS
 update of the signal amplitudes, each block adapting independently. A noise-only
 or **stationary** fit (`run_stationary_psd_mcmc`, a time-invariant 1D
 log-P-spline) instead absorbs the signal and the time-varying confusion power and
-biases the PSD high. Demos:
+biases the PSD high. Demo:
 
 ```bash
-python notes/scripts/make_lisa_tdi_signal_demo.py   # realistic: jaxGB TDI signal + lisatools noise (joint NUTS)
-python notes/scripts/make_lisa_gibbs_demo.py        # realistic: blocked-Gibbs joint fit vs stationary baseline
+python notes/scripts/make_lisa_demo.py   # jaxGB TDI signal + lisatools noise, blocked-Gibbs vs stationary
 ```
 
 The realistic demo needs the `[lisa]` extra (`uv pip install -e '.[lisa]'`:

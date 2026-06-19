@@ -4,8 +4,44 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+def set_paper_style() -> None:
+    """Apply a publication style matching the PRD/ApJ reference figures.
+
+    Computer-Modern math (no system LaTeX needed) with a serif body font,
+    inward major+minor ticks on all four spines, frameless legends, and no
+    gridlines -- the conventions used by Digman & Cornish (2022) and Rosati &
+    Littenberg (2024). Call once at the top of a figure script.
+    """
+    mpl.rcParams.update({
+        "font.family": "serif",
+        "font.serif": ["cmr10", "DejaVu Serif"],
+        "mathtext.fontset": "cm",
+        "axes.formatter.use_mathtext": True,
+        "axes.unicode_minus": False,
+        "font.size": 11,
+        "axes.labelsize": 12,
+        "axes.titlesize": 12,
+        "legend.fontsize": 10,
+        "legend.frameon": False,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "axes.linewidth": 0.8,
+        "axes.grid": False,
+        "xtick.direction": "in",
+        "ytick.direction": "in",
+        "xtick.top": True,
+        "ytick.right": True,
+        "xtick.minor.visible": True,
+        "ytick.minor.visible": True,
+        "lines.linewidth": 1.8,
+        "savefig.dpi": 200,
+        "figure.dpi": 120,
+    })
 
 
 def save_figure(fig: plt.Figure, path: str | Path, *, dpi: int = 160) -> Path:

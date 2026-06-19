@@ -35,7 +35,12 @@ from .moving_periodogram import (  # noqa: E402
 )
 from .stationary import run_stationary_psd_mcmc  # noqa: E402
 from .metrics import interval_coverage, mse_log_psd, relative_surface_error  # noqa: E402
-from .plotting import plot_channel_slice, plot_surface_comparison, save_figure  # noqa: E402
+from .plotting import (  # noqa: E402
+    plot_channel_slice,
+    plot_surface_comparison,
+    save_figure,
+    set_paper_style,
+)
 from .stft import moving_stft, run_stft_mcmc, stft_white_noise_calibration  # noqa: E402
 
 __all__ = [
@@ -61,4 +66,5 @@ __all__ = [
     "plot_surface_comparison",
     "plot_channel_slice",
     "save_figure",
+    "set_paper_style",
 ]
