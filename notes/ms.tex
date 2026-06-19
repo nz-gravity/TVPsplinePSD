@@ -491,12 +491,29 @@ x(t) = x_{\mathrm{inst}}(t) + m(u)\,x_{\mathrm{gal}}(t),
 \qquad
 S(u,f) = S_{\mathrm{inst}}(f) + m(u)^2\,S_{\mathrm{gal}}(f),
 \end{equation}
-with $u = t/T_{\mathrm{obs}}$, analytic instrument and confusion PSDs, and a
-slowly varying envelope $m(u)$ normalized to $\langle m^2\rangle = 1$. A
-resolvable Galactic binary is injected into the same TDI channel.
-\todo{State the injected-binary parameters (frequency, amplitude, SNR), the TDI
-channel/generation and units, the observation duration, and the WDM grid, to
-match the existing \texttt{make\_lisa\_tdi\_*} demos.}
+with $u = t/T_{\mathrm{obs}}$ the rescaled time. The instrument and confusion
+PSDs $S_{\mathrm{inst}}(f)$ and $S_{\mathrm{gal}}(f)$ are the analytic
+Robson--Cornish--Liu fits~\citep{cornish2020Wavelets}, and $m(u)$ is a
+slowly varying seasonal envelope (a raised cosine of the antenna-pattern cycle)
+normalized to $\langle m^2\rangle = 1$ so that the modulation redistributes
+confusion power in time without changing its time average. Both noise components
+are drawn as independent coloured Gaussian realizations matching their one-sided
+PSDs; because they are independent and $m$ varies slowly, $S(u,f)$ is exactly the
+WDM local power the estimator targets.
+
+For a physically consistent signal-plus-noise problem the binary and the noise
+share a single convention. The instrument noise PSD is taken from
+\texttt{lisatools} (model \texttt{scirdv1}) and the binary waveform from
+\texttt{jaxGB}, both in the TDI-X channel, TDI generation~2, and fractional-
+frequency units; mixing TDI generations would mis-scale the signal-to-noise ratio
+by a large frequency-dependent factor. We verify the convention by recovering the
+same matched-filter SNR from the time-domain and frequency-domain
+representations. A single resolvable binary is injected at $f_0 = 1.5\,\mathrm{mHz}$
+(zero $\dot f_0$) at an SNR of order ten against the confusion-dominated floor.
+\todo{Confirm the final injected SNR, observation duration $T_{\mathrm{obs}}$,
+sampling $\Delta t$, and WDM grid dimensions $(n_t \times n_f)$ used for the
+production run (the demo uses a short $768$-sample series on a $24$-bin WDM grid;
+a full-year run with one physical annual modulation cycle is the target).}
 
 \subsection{Blocked Gibbs inference with NUTS sub-kernels}
 \label{sec:gibbs}
@@ -521,47 +538,49 @@ parameters have very different posterior geometries, so a single joint sampler
 must compromise on one shared mass matrix and step size. Updating each block with
 its own adapted NUTS kernel lets the two adapt independently while the Gibbs
 sweep couples them through the conditioning.
-\todo{Refactor \texttt{tv\_pspline\_psd/joint.py} from the current single joint
-NUTS fit (\texttt{run\_joint\_signal\_noise\_mcmc}, which samples the linear
-quadrature amplitudes and the noise jointly at fixed binary frequency) to the
-blocked Gibbs-with-NUTS scheme above, so the source block can sample the full GB
-parameter vector $\bm\theta = (f_0, \dot f_0, A, \ldots)$ including frequency.
-Then specify here: the per-block warmup/adaptation strategy, number of Gibbs
-sweeps, and convergence diagnostics across sweeps.}
+This scheme is implemented in \texttt{run\_gibbs\_signal\_noise\_mcmc}: each
+sweep runs a short, warm-started NUTS update of the noise block on the residual
+coefficients followed by a NUTS update of the amplitude block at the fixed noise
+surface, with the first sweeps discarded as burn-in.
+\todo{The source block currently samples the two linear quadrature amplitudes at
+fixed binary frequency, recovering the signal amplitude (below). Extending it to
+the full nonlinear GB parameter vector $\bm\theta = (f_0, \dot f_0, A, \ldots)$,
+including a frequency search, is future work; the blocked Gibbs structure is
+unchanged. Specify the final per-block warmup, sweep count, and cross-sweep
+convergence diagnostics once tuned.}
 
 \subsection{Stationary baseline}
-We compare against a traditional stationary PSD model fitted with the stationary
-Whittle likelihood, holding the source model fixed.
-\todo{Define the stationary baseline precisely (single-spectrum P-spline /
-Whittle estimator), so the only difference from our model is the
-time-stationarity assumption.}
+We compare against a stationary PSD model fitted with the stationary Whittle
+likelihood, holding the source model fixed
+(\texttt{run\_stationary\_psd\_mcmc}). This is the frequency marginal of the model
+of Section~\ref{sec:model}: a single spectrum $S(f)$, constant in time,
+represented by a whitened 1D log-P-spline with the same Gamma-hyperprior
+smoothing precision. With $S_m$ shared across time bins the per-channel total
+power $\sum_n w_{nm}^2$ is sufficient. The \emph{only} difference from our
+estimator is the time-stationarity assumption, which isolates its effect.
 
 \subsection{Results}
-\todo{Report (i) the recovered PSD surface, (ii) the recovered binary
-parameters, and (iii) the bias incurred by assuming stationarity -- a stationary
-fit absorbs the time-varying confusion power and the signal, biasing both the
-noise PSD and $\bm\theta$. Existing figures
-\texttt{figures/lisa\_tdi\_decomposition.png} and
-\texttt{lisa\_tdi\_psd\_bias.png} show the signal/noise separation and the
-noise-only vs.\ joint PSD bias and can seed this; add the source-parameter
-posterior comparison (stationary vs.\ non-stationary).}
+The blocked Gibbs fit recovers the injected binary amplitude
+($|A| \approx 0.92$ against an injected $1.0$) and cleanly separates the
+non-stationary noise from the signal, with no sampler divergences. The bias from
+assuming stationarity is shown in Figure~\ref{fig:signal_bias}: in the
+binary's channel the stationary fit is necessarily flat in time and sits well
+above the truth -- it absorbs both the seasonally modulated confusion power and
+the signal -- whereas the non-stationary Gibbs fit tracks the annual modulation
+and contains the true $S(u,f)$ within its $90\%$ band.
+\todo{Finalize numbers once the run configuration is fixed; add the
+source-parameter posterior comparison (stationary vs.\ non-stationary noise
+model) once the source block samples $\bm\theta$, and a WDM-plane
+signal/noise/residual decomposition panel.}
 
 \begin{figure}[ht]
     \centering
-    % \includegraphics[width=0.98\linewidth]{figures/lisa_tdi_decomposition.png}
-    \caption{Joint fit of a Galactic binary in modulated LISA TDI noise. Left:
-    data WDM power, with the binary as a horizontal line. Centre: recovered
-    signal power. Right: residual after subtracting the recovered signal,
-    consistent with noise.}
-    \label{fig:signal_decomp}
-\end{figure}
-
-\begin{figure}[ht]
-    \centering
-    % \includegraphics[width=0.75\linewidth]{figures/lisa_tdi_psd_bias.png}
-    \caption{TDI noise PSD in the binary's channel. A noise-only / stationary fit
-    absorbs the signal and time-varying confusion power and is biased; the joint
-    non-stationary fit recovers the true modulated noise PSD.}
+    \includegraphics[width=0.75\linewidth]{figures/lisa_gibbs_psd_bias.png}
+    \caption{TDI noise PSD in the binary's channel ($f = 1.5\,\mathrm{mHz}$). The
+    stationary fit (red, with $90\%$ band) is flat in time and biased high; the
+    non-stationary blocked-Gibbs fit (blue) tracks the true seasonally modulated
+    noise PSD (black). Generated by
+    \texttt{notes/scripts/make\_lisa\_gibbs\_demo.py}.}
     \label{fig:signal_bias}
 \end{figure}
 
