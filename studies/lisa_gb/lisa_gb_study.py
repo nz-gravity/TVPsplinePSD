@@ -201,11 +201,21 @@ def make_jgb(grid: dict):
 
 
 def _gb_params(xp, f0, fdot, amplitude, phi0, sky=None):
-    """Assemble the 8-vector [f0, fdot, A, ra, dec, psi, iota, phi0]."""
+    """Assemble the 8-vector [f0, fdot, A, ra, dec, psi, iota, phi0].
+
+    jaxgb 0.2.1 expects a flat 8-vector of scalars.  The sampler can hand us
+    ``(1,)``-shaped tracers for f0/fdot (and Python floats for the sky angles),
+    so every entry is squeezed to a 0-d scalar before stacking to avoid the
+    "different numbers of dimensions" stack error.
+    """
     s = sky if sky is not None else GB_SKY
-    return xp.stack([f0, fdot, amplitude,
-                     xp.asarray(s["ra"]), xp.asarray(s["dec"]),
-                     xp.asarray(s["psi"]), xp.asarray(s["iota"]), phi0])
+
+    def scalar(v):
+        return xp.reshape(xp.asarray(v), ())
+
+    return xp.stack([scalar(f0), scalar(fdot), scalar(amplitude),
+                     scalar(s["ra"]), scalar(s["dec"]),
+                     scalar(s["psi"]), scalar(s["iota"]), scalar(phi0)])
 
 
 def gb_full_rfft(jgb, grid: dict, f0, fdot, amplitude, phi0, *, sky=None):
@@ -220,7 +230,8 @@ def gb_full_rfft(jgb, grid: dict, f0, fdot, amplitude, phi0, *, sky=None):
     params = _gb_params(jnp, f0, fdot, amplitude, phi0, sky)
     aet = jgb.get_tdi(params, tdi_generation=1.5, tdi_combination="AET")
     locs = jnp.stack([jnp.asarray(aet[ch], dtype=jnp.complex128) for ch in CHANNELS])
-    start = jax.lax.stop_gradient(jnp.asarray(jgb.get_kmin(params[None, 0:1]), dtype=jnp.int32).reshape(()))
+    kmin = jgb.get_kmin(f0=jnp.reshape(params[0], (1,)))  # jaxgb 0.2.1: f0 as (1,) array
+    start = jax.lax.stop_gradient(jnp.asarray(kmin, dtype=jnp.int32).reshape(()))
     full = jnp.zeros((len(CHANNELS), grid["n_freqs"]), dtype=jnp.complex128)
     return jax.lax.dynamic_update_slice(full, locs, (jnp.zeros((), jnp.int32), start))
 
@@ -233,7 +244,7 @@ def gb_full_rfft_np(jgb, grid: dict, f0, fdot, amplitude, phi0, sky=None):
 
     params = jnp.asarray(np.asarray(_gb_params(np, f0, fdot, amplitude, phi0, sky), dtype=float))
     aet = jgb.get_tdi(params, tdi_generation=1.5, tdi_combination="AET")
-    kmin = int(np.asarray(jgb.get_kmin(params[None, 0:1])).reshape(-1)[0])
+    kmin = int(np.asarray(jgb.get_kmin(f0=jnp.array([float(params[0])]))).reshape(-1)[0])
     full = np.stack([place_local_tdi(np.asarray(aet[ch]), kmin, grid["n_freqs"]) for ch in CHANNELS])
     return full, kmin
 
@@ -634,8 +645,9 @@ def _diagnostics(mcmc) -> dict:
     # circular boundary, so R-hat is not inflated by phi0 wrapping.
     for k in ("z_f0", "z_fdot", "z_gc", "z_gs"):
         x = np.asarray(by_chain[k])  # (chains, draws)
-        rhat[k] = float(split_gelman_rubin(x))
-        ess[k] = float(effective_sample_size(x))
+        # Split-R-hat needs >=2 chains; report nan for single-chain (smoke) runs.
+        rhat[k] = float(split_gelman_rubin(x)) if x.shape[0] > 1 else float("nan")
+        ess[k] = float(np.mean(effective_sample_size(x)))
     div = int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum())
     return {"rhat": rhat, "ess": ess, "divergences": div}
 
