@@ -24,6 +24,7 @@ from .inference import (
 )
 from .joint import (
     run_gibbs_signal_noise_mcmc,
+    run_gibbs_stft_signal_noise_mcmc,
     run_joint_signal_noise_mcmc,
     run_multichannel_joint_mcmc,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "run_wdm_psd_mcmc",
     "run_joint_signal_noise_mcmc",
     "run_gibbs_signal_noise_mcmc",
+    "run_gibbs_stft_signal_noise_mcmc",
     "run_multichannel_joint_mcmc",
     "run_tang_dynamic_whittle_mcmc",
     "tang_moving_periodogram",

@@ -305,6 +305,232 @@ def run_gibbs_signal_noise_mcmc(
     }
 
 
+def _stft_signal_amplitude_model(resid_signal, templates, log_psd, amp_scale):
+    """NUTS update of the linear amplitudes ``beta`` with the noise fixed.
+
+    The STFT cell carries two real components (real, imag), and both share the
+    same noise log-PSD (one channel). With the noise surface ``log_psd`` held
+    fixed, the amplitudes enter only the Gaussian data term
+
+        -0.5 * sum_r (d_r - sum_k beta_k g_{k,r})^2 * exp(-log_psd),
+
+    summed over the ``r = 0, 1`` (real, imag) component axis.
+
+    Args:
+        resid_signal: Data coefficients ``(2, n_time, n_freq)`` (real, imag).
+        templates: Template components ``(K, 2, n_time, n_freq)``.
+        log_psd: Fixed noise log-PSD ``(n_time, n_freq)`` (shared across the 2
+            components).
+        amp_scale: Prior scale for ``beta``.
+    """
+    with numpyro.plate("templates", templates.shape[0]):
+        beta = numpyro.sample("beta", dist.Normal(0.0, amp_scale))
+    signal = jnp.tensordot(beta, templates, axes=1)  # (2, n_time, n_freq)
+    resid = resid_signal - signal
+    inv_psd = jnp.exp(-log_psd)[None, :, :]  # broadcast over the 2 components
+    log_like = -0.5 * jnp.sum(resid**2 * inv_psd)
+    numpyro.factor("stft_signal", log_like)
+
+
+def run_gibbs_stft_signal_noise_mcmc(
+    coeffs: np.ndarray,
+    templates: np.ndarray,
+    time_grid: np.ndarray,
+    freq_grid: np.ndarray,
+    *,
+    config: PSplineConfig,
+    amp_scale: float | None = None,
+    n_sweeps: int = 60,
+    n_burnin_sweeps: int = 20,
+    noise_steps: int = 30,
+    signal_steps: int = 30,
+    noise_warmup: int = 150,
+    signal_warmup: int = 80,
+    random_seed: int = 7,
+    max_tree_depth: int = 10,
+    target_accept_prob: float = 0.9,
+) -> dict[str, object]:
+    """Blocked-Gibbs joint signal + non-stationary-noise sampler for the STFT.
+
+    The phase-retaining moving-Fourier front end keeps the real and imaginary
+    parts of each STFT coefficient (``R = 2``), so a *coherent* signal mean can be
+    subtracted -- impossible with a power-only periodogram, which discards phase.
+    This is the STFT analogue of :func:`run_gibbs_signal_noise_mcmc`: a
+    Metropolis-within-Gibbs sampler that alternates
+
+      1. a NUTS update of the whitened P-spline **noise** block on the residual
+         coefficients ``data - signal`` (both components), and
+      2. a NUTS update of the linear-amplitude **signal** block with the noise
+         surface fixed,
+
+    warm-starting each block from the previous sweep's state via ``init_params``.
+
+    Template-format convention:
+        ``templates`` has shape ``(K, 2, n_time, n_freq)`` -- the real and
+        imaginary STFT components of each of the ``K`` templates, matching the
+        ``(real, imag)`` layout of ``coeffs`` from :func:`moving_stft`. The signal
+        mean for component ``r`` is ``sum_k beta_k * templates[k, r]``. A complex
+        ``(K, n_time, n_freq)`` array is also accepted and split into its real and
+        imaginary parts.
+
+    Args:
+        coeffs: STFT coefficients ``(2, n_time, n_freq)`` = (real, imag).
+        templates: Signal templates ``(K, 2, n_time, n_freq)`` real/imag
+            components, or complex ``(K, n_time, n_freq)``.
+        time_grid: Rescaled segment-centre times in ``[0, 1]``.
+        freq_grid: Channel frequencies (Hz).
+        config: Estimator configuration.
+        amp_scale: Prior scale for the amplitudes ``beta`` (default: data RMS).
+        n_sweeps: Total Gibbs sweeps (signal + noise alternations).
+        n_burnin_sweeps: Leading sweeps discarded before collecting samples.
+        noise_steps, signal_steps: Kept NUTS samples per block per sweep.
+        noise_warmup, signal_warmup: NUTS warmup steps for the first sweep of
+            each block (subsequent sweeps reuse the adapted mass matrix via the
+            warm start and use a short re-warmup).
+
+    Returns:
+        A results dict with ``beta_mean``, ``beta_std``, ``psd_mean/lower/upper``
+        and ``divergences``, mirroring :func:`run_joint_signal_noise_mcmc`.
+    """
+    coeffs = np.asarray(coeffs)
+    if coeffs.ndim != 3 or coeffs.shape[0] != 2:
+        raise ValueError("coeffs must have shape (2, n_time, n_freq).")
+    coeffs = coeffs.astype(float)
+
+    templates = np.asarray(templates)
+    if np.iscomplexobj(templates):
+        templates = np.stack([templates.real, templates.imag], axis=1)
+    templates = templates.astype(float)
+    if templates.ndim != 4 or templates.shape[1] != 2:
+        raise ValueError("templates must have shape (K, 2, n_time, n_freq).")
+    n_templates = templates.shape[0]
+
+    freq_unit = freq_grid / np.maximum(freq_grid[-1], 1e-12)
+    if amp_scale is None:
+        amp_scale = float(np.sqrt(np.mean(coeffs**2)))
+
+    B_time, knots_time = create_bspline_basis(
+        time_grid, config.n_interior_knots_time, degree=config.degree_time
+    )
+    B_freq, knots_freq = create_bspline_basis(
+        freq_unit, config.n_interior_knots_freq, degree=config.degree_freq
+    )
+    P_time = create_bspline_roughness_penalty(
+        knots_time, degree=config.degree_time, derivative_order=config.diff_order_time
+    )
+    P_freq = create_bspline_roughness_penalty(
+        knots_freq, degree=config.degree_freq, derivative_order=config.diff_order_freq
+    )
+    whitened = whiten_penalty_pair(P_time, P_freq)
+    basis_eig_time = B_time @ whitened["U_time"]
+    basis_eig_freq = B_freq @ whitened["U_freq"]
+
+    eig_time_j = jnp.asarray(basis_eig_time)
+    eig_freq_j = jnp.asarray(basis_eig_freq)
+    lam_time_j = jnp.asarray(whitened["lam_time"])
+    lam_freq_j = jnp.asarray(whitened["lam_freq"])
+    joint_null_j = jnp.asarray(whitened["joint_null"])
+    coeffs_j = jnp.asarray(coeffs)
+    templates_j = jnp.asarray(templates)
+
+    # Warm start the noise block from the per-component mean power of the data.
+    power = np.sum(coeffs**2, axis=0) / coeffs.shape[0]
+    pls_init = initialize_with_penalized_least_squares(
+        power, B_time, B_freq, P_time, P_freq, config
+    )
+    noise_init = whitened_init_values(pls_init, whitened, config)
+
+    def _current_log_psd(noise_state):
+        eig = reconstruct_eig_coeff_samples(
+            {k: np.asarray(v)[None] for k, v in noise_state.items()}, whitened, config
+        )[0]
+        return jnp.asarray(basis_eig_time @ eig @ basis_eig_freq.T)
+
+    key = random.PRNGKey(random_seed)
+    noise_kernel = NUTS(
+        pspline_surface_model,
+        max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob,
+    )
+    signal_kernel = NUTS(
+        _stft_signal_amplitude_model,
+        max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob,
+    )
+
+    beta_samples: list[np.ndarray] = []
+    eig_samples: list[np.ndarray] = []
+    log_psd_samples: list[np.ndarray] = []
+    divergences = 0
+
+    beta_state = np.zeros(n_templates)
+    noise_state = {k: np.asarray(v) for k, v in noise_init.items()}
+
+    for sweep in range(n_sweeps):
+        first = sweep == 0
+        # --- Noise block: fit P-spline surface to the signal-subtracted data. ---
+        signal = jnp.tensordot(jnp.asarray(beta_state), templates_j, axes=1)
+        resid = coeffs_j - signal  # (2, n_time, n_freq)
+        key, sub = random.split(key)
+        noise_mcmc = MCMC(
+            noise_kernel, num_warmup=(noise_warmup if first else noise_warmup // 3),
+            num_samples=noise_steps, num_chains=1, chain_method="sequential",
+            progress_bar=False,
+        )
+        noise_mcmc.run(
+            sub, resid, eig_time_j, eig_freq_j, lam_time_j, lam_freq_j,
+            joint_null_j, config, True,
+            init_params={k: jnp.asarray(v) for k, v in noise_state.items()},
+            extra_fields=("diverging",),
+        )
+        noise_samp = {k: np.asarray(v) for k, v in noise_mcmc.get_samples().items()}
+        noise_state = {k: v[-1] for k, v in noise_samp.items() if k != "log_psd"}
+        divergences += int(
+            np.asarray(noise_mcmc.get_extra_fields()["diverging"]).sum()
+        )
+        log_psd_fixed = _current_log_psd(noise_state)
+
+        # --- Signal block: update amplitudes with the noise surface fixed. ---
+        key, sub = random.split(key)
+        signal_mcmc = MCMC(
+            signal_kernel, num_warmup=(signal_warmup if first else signal_warmup // 3),
+            num_samples=signal_steps, num_chains=1, chain_method="sequential",
+            progress_bar=False,
+        )
+        signal_mcmc.run(
+            sub, coeffs_j, templates_j, log_psd_fixed, float(amp_scale),
+            init_params={"beta": jnp.asarray(beta_state)},
+            extra_fields=("diverging",),
+        )
+        beta_post = np.asarray(signal_mcmc.get_samples()["beta"])
+        beta_state = beta_post[-1]
+        divergences += int(
+            np.asarray(signal_mcmc.get_extra_fields()["diverging"]).sum()
+        )
+
+        if sweep >= n_burnin_sweeps:
+            beta_samples.append(beta_post)
+            eig = reconstruct_eig_coeff_samples(noise_samp, whitened, config)
+            eig_samples.append(eig)
+            log_psd_samples.append(np.asarray(noise_samp["log_psd"]))
+
+    beta_all = np.concatenate(beta_samples, axis=0)
+    eig_all = np.concatenate(eig_samples, axis=0)
+    log_psd_all = np.concatenate(log_psd_samples, axis=0)
+    log_mean, log_lower, log_upper = surface_summaries(
+        eig_all, basis_eig_time, basis_eig_freq, precomputed=log_psd_all,
+    )
+    return {
+        "time_grid": np.asarray(time_grid),
+        "freq_grid": np.asarray(freq_grid),
+        "beta_samples": beta_all,
+        "beta_mean": beta_all.mean(axis=0),
+        "beta_std": beta_all.std(axis=0),
+        "psd_mean": np.exp(log_mean),
+        "psd_lower": np.exp(log_lower),
+        "psd_upper": np.exp(log_upper),
+        "divergences": int(divergences),
+    }
+
+
 def _multichannel_joint_model(coeffs, templates, basis_eig_time, basis_eig_freq,
                               lam_time, lam_freq, joint_null, amp_scale, config):
     """Per-channel noise surfaces with one shared signal amplitude vector.
