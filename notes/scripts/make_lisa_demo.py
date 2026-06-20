@@ -1,4 +1,4 @@
-"""LISA non-stationary demonstration: one annual realisation, all four figures.
+"""LISA non-stationary demonstration: one annual realisation, all figures.
 
 A single, physically consistent year of LISA TDI-X (generation-2) data is
 simulated once and analysed once; every non-stationary LISA figure in the
@@ -19,8 +19,8 @@ We run, on the same data:
   * a stationary Whittle baseline (the traditional time-invariant LISA model).
 
 Figures written to ``notes/figures/``:
-  lisa_surface_comparison.png, lisa_tdi_decomposition.png,
-  lisa_gibbs_psd_bias.png, lisa_representation_comparison.png
+  lisa_surface_comparison.png, lisa_gibbs_psd_bias.png,
+  lisa_representation_comparison.png
 and the intermediate arrays are cached to ``studies/results/lisa/lisa_demo.npz``.
 
 Needs the [lisa] extra.
@@ -51,6 +51,7 @@ from tv_pspline_psd import (
     run_gibbs_signal_noise_mcmc,
     run_gibbs_stft_signal_noise_mcmc,
     run_stationary_psd_mcmc,
+    run_tang_dynamic_whittle_mcmc,
     save_figure,
     set_paper_style,
     wdm_analysis_coefficients,
@@ -74,21 +75,24 @@ def make_config(quick: bool):
             stft_fit=dict(n_sweeps=8, n_burnin_sweeps=3, noise_steps=6, signal_steps=6,
                           noise_warmup=80, signal_warmup=50),
             stat_fit=dict(n_warmup=200, n_samples=200),
+            dw_fit=dict(m=10, thin=2, n_time_grid=24, n_warmup=150, n_samples=150),
             mc_draws=20, cal_draws=20,
         )
-    # Annual production grid: 1 year, Nyquist ~2.5 mHz. A bright, clearly
-    # resolvable binary (SNR ~150) -- over a full year the SNR is spread across
-    # ~nt time bins, so the per-cell amplitude must be high enough to recover
-    # cleanly, as for a real LISA verification binary.
-    nt, nf = 512, 308  # N = nt * nf; both even (WDM requirement)
+    # Annual production grid: 1 year, Nyquist ~2.5 mHz. The binary SNR is spread
+    # across the nt WDM time bins, so a coarser time grid (nt=256) keeps both
+    # annual confusion peaks while giving enough per-bin SNR to recover the
+    # source cleanly; SNR~200 is a bright, realistic LISA verification binary.
+    nt, nf = 256, 616  # N = nt * nf; both even (WDM requirement)
     n_years = 1.0
     return dict(
         N=nt * nf, dt=_YEAR / (nt * nf), nt=nt, nperseg=512, n_years=n_years,
-        target_snr=150.0,
-        wdm_fit=dict(n_sweeps=70, n_burn_sweeps=25, block_warmup=50, block_samples=8),
+        target_snr=200.0,
+        wdm_fit=dict(n_sweeps=70, n_burn_sweeps=25, block_warmup=60, block_samples=8,
+                     target_accept_prob=0.95),
         stft_fit=dict(n_sweeps=55, n_burnin_sweeps=18, noise_steps=8, signal_steps=8,
-                      noise_warmup=150, signal_warmup=80),
+                      noise_warmup=150, signal_warmup=80, target_accept_prob=0.95),
         stat_fit=dict(n_warmup=400, n_samples=400),
+        dw_fit=dict(m=150, thin=2, n_time_grid=64, n_warmup=300, n_samples=300),
         mc_draws=80, cal_draws=80,
     )
 
@@ -137,9 +141,11 @@ def main() -> None:
     def _wdm(series):
         return wdm_analysis_coefficients(series / ref, DT, NT, pcfg)
 
+    g1_ts = gb_tdi_signal(N, DT, {**gbp, "phi0": 0.0}, tdi_gen=2.0)
+    g2_ts = gb_tdi_signal(N, DT, {**gbp, "phi0": np.pi / 2}, tdi_gen=2.0)
     w_data, tg_w, fg_w = _wdm(data)
-    wg1, _, _ = _wdm(gb_tdi_signal(N, DT, {**gbp, "phi0": 0.0}, tdi_gen=2.0))
-    wg2, _, _ = _wdm(gb_tdi_signal(N, DT, {**gbp, "phi0": np.pi / 2}, tdi_gen=2.0))
+    wg1, _, _ = _wdm(g1_ts)
+    wg2, _, _ = _wdm(g2_ts)
     w_templates = np.stack([wg1, wg2], axis=0)
     w_sig, _, _ = _wdm(signal)
     w_beta_true, *_ = np.linalg.lstsq(
@@ -192,6 +198,19 @@ def main() -> None:
     stationary = run_stationary_psd_mcmc(
         w_data - recovered_w, fg_w, config=pcfg, random_seed=1, **cfg["stat_fit"])
 
+    # Dynamic-Whittle (power-only moving periodogram): noise-PSD only, so it runs
+    # on the time series with the recovered binary subtracted (it cannot subtract a
+    # coherent template itself). It is the power sibling of the STFT front end.
+    print("[fit] dynamic Whittle (moving periodogram) ...")
+    rec_ts = gibbs_w["beta_mean"][0] * g1_ts + gibbs_w["beta_mean"][1] * g2_ts
+    dw = run_tang_dynamic_whittle_mcmc(
+        data - rec_ts, dt=DT, config=pcfg, random_seed=1, **cfg["dw_fit"])
+    gb_dw = int(np.argmin(np.abs(dw["freq_grid"] - gbp["f0"])))
+    dw_slice = dw["psd_mean"][:, gb_dw]
+    dw_rel = dw_slice / dw_slice.mean()
+    print(f"[result] dynamic-Whittle div={dw['divergences']} "
+          f"(GB channel f={dw['freq_grid'][gb_dw]*1e3:.2f} mHz)")
+
     # Recovered-amplitude posteriors (relative to each representation's truth).
     ratio_w = np.hypot(gibbs_w["beta_samples"][:, 0], gibbs_w["beta_samples"][:, 1]) / np.hypot(*w_beta_true)
     ratio_s = np.hypot(gibbs_s["beta_samples"][:, 0], gibbs_s["beta_samples"][:, 1]) / np.hypot(*s_beta_true)
@@ -213,6 +232,7 @@ def main() -> None:
         gibbs_s_psd=gibbs_s["psd_mean"], gibbs_s_lo=gibbs_s["psd_lower"], gibbs_s_hi=gibbs_s["psd_upper"],
         gb_w=gb_w, gb_s=gb_s, n_years=n_years, r_w=r_w, r_s=r_s, snr=snr,
         ratio_w=ratio_w, ratio_s=ratio_s,
+        dw_tg=dw["time_grid"], dw_rel=dw_rel, dw_gb_freq=float(dw["freq_grid"][gb_dw]),
     )
     print(f"[cache] wrote {CACHE}")
 
@@ -220,7 +240,7 @@ def main() -> None:
 
 
 def render(fig_dir: Path, d) -> None:
-    """Render the four non-stationary LISA figures from cached arrays."""
+    """Render the three non-stationary LISA figures from cached arrays."""
     set_paper_style()
     tg_w, fg_w = d["tg_w"], d["fg_w"]
     yrs = d["n_years"]
@@ -244,20 +264,7 @@ def render(fig_dir: Path, d) -> None:
     fig.colorbar(mesh, ax=axes, label="log local power", shrink=0.9)
     save_figure(fig, fig_dir / "lisa_surface_comparison.png")
 
-    # --- 2. Signal decomposition: data | recovered GB | residual ---
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.2), constrained_layout=True, sharey=True)
-    panels = [(d["w_data"], "Data WDM power"),
-              (d["recovered_w"], "Recovered GB power"),
-              (d["w_data"] - d["recovered_w"], "Residual power")]
-    for ax, (fld, ttl) in zip(axes, panels):
-        mesh = ax.pcolormesh(t_w, fg_w * 1e3, np.log(fld ** 2 + 1e-30).T,
-                             shading="nearest", cmap="viridis")
-        ax.set_title(ttl); ax.set_xlabel("Time [yr]")
-        fig.colorbar(mesh, ax=ax, shrink=0.9)
-    axes[0].set_ylabel("Frequency [mHz]")
-    save_figure(fig, fig_dir / "lisa_tdi_decomposition.png")
-
-    # --- 3. PSD bias in the GB channel: true / stationary / Gibbs ---
+    # --- 2. PSD bias in the GB channel: true / stationary / Gibbs ---
     fig, ax = plt.subplots(figsize=(7.0, 4.2), constrained_layout=True)
     ax.plot(t_w, d["true_psd_w"][:, gb_w], color="black", lw=2.0, label="True noise PSD")
     ax.plot(t_w, d["stat_psd"][:, gb_w], color="tab:red", lw=1.8, label="Stationary fit")
@@ -270,24 +277,28 @@ def render(fig_dir: Path, d) -> None:
     ax.legend(loc="upper right")
     save_figure(fig, fig_dir / "lisa_gibbs_psd_bias.png")
 
-    # --- 4. Representation comparison: WDM | STFT | amplitude recovery ---
+    # --- 3. Representation comparison: relative modulation across all three
+    #         non-stationary front ends (WDM, STFT, dynamic Whittle) | amplitudes ---
     tg_s = d["tg_s"]; t_s = tg_s * yrs; fg_s = d["fg_s"]
-    fig, (ax_w, ax_s, ax_a) = plt.subplots(
-        1, 3, figsize=(15, 4.2), gridspec_kw={"width_ratios": [2, 2, 1]},
-        constrained_layout=True)
-    ax_w.plot(t_w, d["true_psd_w"][:, gb_w], color="black", lw=2.2, label="True PSD")
-    ax_w.plot(t_w, d["stat_psd"][:, gb_w], color="tab:red", lw=2.0, label="Stationary (biased)")
-    ax_w.plot(t_w, d["gibbs_w_psd"][:, gb_w], color="tab:blue", lw=2.0, label="WDM Gibbs")
-    ax_w.fill_between(t_w, d["gibbs_w_lo"][:, gb_w], d["gibbs_w_hi"][:, gb_w], color="tab:blue", alpha=0.18)
-    ax_w.set_title(f"WDM noise PSD ($f={fg_w[gb_w]*1e3:.2f}$ mHz)")
-    ax_w.set_xlabel("Time [yr]"); ax_w.set_ylabel("Local power"); ax_w.legend(fontsize=8)
 
-    ax_s.plot(t_s, d["true_psd_s"][:, gb_s], color="black", lw=2.0, label="True PSD")
-    ax_s.plot(t_s, d["gibbs_s_psd"][:, gb_s], color="tab:green", lw=1.8, label="STFT Gibbs")
-    ax_s.fill_between(t_s, d["gibbs_s_lo"][:, gb_s], d["gibbs_s_hi"][:, gb_s], color="tab:green", alpha=0.18)
-    ax_s.set_xlim(t_s.min(), t_s.max())
-    ax_s.set_title(f"STFT noise PSD ($f={fg_s[gb_s]*1e3:.2f}$ mHz)")
-    ax_s.set_xlabel("Time [yr]"); ax_s.legend(loc="upper right")
+    def _rel(slice_):  # normalise a GB-channel slice by its own time-average
+        return slice_ / np.mean(slice_)
+
+    fig, (ax_m, ax_a) = plt.subplots(
+        1, 2, figsize=(13, 4.4), gridspec_kw={"width_ratios": [2.4, 1]},
+        constrained_layout=True)
+
+    ax_m.plot(t_w, _rel(d["true_psd_w"][:, gb_w]), color="black", lw=2.4, label="True modulation")
+    ax_m.axhline(1.0, color="tab:red", lw=1.8, ls="-", label="Stationary fit")
+    ax_m.plot(t_w, _rel(d["gibbs_w_psd"][:, gb_w]), color="tab:blue", lw=1.8, label="WDM (Gibbs)")
+    ax_m.plot(t_s, _rel(d["gibbs_s_psd"][:, gb_s]), color="tab:green", lw=1.8, label="STFT (Gibbs)")
+    ax_m.plot(np.asarray(d["dw_tg"]) * yrs, np.asarray(d["dw_rel"]), color="tab:purple",
+              lw=1.8, ls="--", label="Dynamic Whittle")
+    ax_m.set_xlim(t_w.min(), t_w.max())
+    ax_m.set_xlabel("Time [yr]")
+    ax_m.set_ylabel(r"Relative noise power $S(u)\,/\,\langle S\rangle$")
+    ax_m.set_title(rf"Modulation recovery at $f \approx {fg_w[gb_w]*1e3:.2f}$ mHz")
+    ax_m.legend(loc="upper right", ncol=1)
 
     # Recovered-amplitude posteriors as violins (vs. the injected value).
     ratio_w = np.asarray(d["ratio_w"]); ratio_s = np.asarray(d["ratio_s"])
@@ -302,7 +313,7 @@ def render(fig_dir: Path, d) -> None:
     ax_a.set_xlim(-0.6, 1.6); ax_a.set_ylim(0.0, 1.5)
     ax_a.set_title("GB amplitude recovery"); ax_a.legend(loc="lower center")
     save_figure(fig, fig_dir / "lisa_representation_comparison.png")
-    print(f"[figures] wrote 4 LISA figures to {fig_dir}")
+    print(f"[figures] wrote 3 LISA figures to {fig_dir}")
 
 
 if __name__ == "__main__":

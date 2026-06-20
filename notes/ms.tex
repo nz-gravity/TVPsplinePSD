@@ -517,7 +517,7 @@ TDI-X, generation-2, fractional-frequency convention as the noise, so the
 matched-filter signal-to-noise ratio is physically consistent (we verify it
 agrees between the time- and frequency-domain representations). A single
 resolvable binary is injected at $f_0 = 1.5\,\mathrm{mHz}$ with an optimal
-SNR of $150$, typical of a bright LISA verification binary.
+SNR of $200$, typical of a bright LISA verification binary.
 
 We analyse two scenarios that share the same injected binary and instrument
 floor, differing only in the noise stationarity. In Case~1 (stationary noise plus
@@ -571,11 +571,10 @@ $\chi^2_1$ WDM power into a smooth log-PSD surface that matches the Monte Carlo
 reference (Fig.~\ref{fig:lisa_surface}). The estimated $\log S(u,f)$ recovers both
 the steep instrument spectrum at low frequency and the twice-yearly Galactic
 confusion modulation that the raw power buries in noise. Because the coefficient
-likelihood retains phase, the Gibbs fit separates the data into a coherent binary
-and a noise surface (Fig.~\ref{fig:signal_decomp}): the recovered signal is a
-sharp line in the WDM plane and the residual is consistent with noise, and the
-injected amplitude is recovered ($|A|/|A|_{\mathrm{true}} = \RWVAL$) with no
-sampler divergences.
+likelihood retains phase, the Gibbs fit jointly recovers the coherent binary and
+the noise surface: with the binary sub-threshold in any single time--frequency
+cell, its amplitude is nonetheless recovered to within $\sim\!10\%$ by coherent
+summation across the plane ($|A|/|A|_{\mathrm{true}} = 0.90$).
 
 Estimating the four binary parameters $(f_0,\dot f_0, A, \phi_0)$ -- via the
 bilinear Cartesian amplitudes $g_c = A\cos\phi_0$, $g_s = A\sin\phi_0$, so the
@@ -606,16 +605,6 @@ $S(u,f)$ within its $90\%$ band.
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\linewidth]{figures/lisa_tdi_decomposition.png}
-    \caption{Joint fit of a \texttt{jaxGB} Galactic binary in modulated LISA TDI
-    noise. Left: data WDM power, the binary visible as a horizontal line. Centre:
-    recovered signal power. Right: residual after subtracting the recovered
-    signal, consistent with noise.}
-    \label{fig:signal_decomp}
-\end{figure}
-
-\begin{figure}[t]
-    \centering
     \includegraphics[width=\linewidth]{figures/lisa_gb_stationary_corner.png}
     \caption{Binary parameter posteriors $(f_0, \dot f_0, A, \phi_0)$: the
     frequency-domain (blue) and WDM (orange) likelihoods give overlapping
@@ -637,25 +626,40 @@ $S(u,f)$ within its $90\%$ band.
 \subsection{Robustness across representations}
 \label{sec:lisa_grid}
 
-The same conclusion holds independently of the time--frequency representation. On
-the non-stationary noise, both blocked-Gibbs fits -- the WDM transform and the
-phase-retaining moving short-time Fourier transform (STFT, the $R=2$ front end;
-the power-only moving periodogram cannot subtract a coherent template) -- track
-the modulated PSD in the binary's channel and recover the injected amplitude
-consistently ($|A|/|A|_{\mathrm{true}} = \RWVAL$ and $\RSVAL$, no divergences), while
-the stationary model is biased (Fig.~\ref{fig:rep_compare}). The STFT leg is
-fitted with the identical P-spline model, so the cost being measured is the
-stationarity assumption, not the representation.
+The same conclusion holds independently of the time--frequency representation. We
+analyse the non-stationary noise with all three observation models of
+Sec.~\ref{sec:obs}: the WDM coefficient likelihood, the phase-retaining moving
+short-time Fourier transform (STFT, the $R=2$ front end), and the power-only
+dynamic Whittle (moving periodogram). All three recover the same cyclostationary
+modulation of the noise PSD in the binary's channel, tracking the true annual
+envelope where a stationary model is flat (Fig.~\ref{fig:rep_compare}, left).
+Because the dynamic Whittle discards phase it cannot subtract a coherent template,
+so it is applied to the signal-subtracted series purely as a noise-PSD estimator;
+the two phase-retaining front ends additionally recover the binary amplitude
+consistently ($|A|/|A|_{\mathrm{true}} = 0.90$ and $0.85$;
+Fig.~\ref{fig:rep_compare}, right). All three use the identical P-spline model, so
+the cost being measured is the stationarity assumption, not the representation.
+
+The few--ten percent residual underestimate of the amplitude reflects a partial
+degeneracy between the binary's annual antenna-pattern amplitude modulation and
+the cyclostationary confusion in the same channel: a flexible non-stationary noise
+floor can absorb a small fraction of the coherent source power. The effect is
+absent in the stationary-noise consistency check, where both domains recover the
+amplitude without bias (Fig.~\ref{fig:gb_corner}), and we expect it to tighten
+with the full nonlinear source model and informative source priors discussed in
+Sec.~\ref{sec:discussion}.
 
 \begin{figure*}[t]
     \centering
     \includegraphics[width=0.95\linewidth]{figures/lisa_representation_comparison.png}
-    \caption{Non-stationary noise, three representations. Left: WDM noise PSD in
-    the binary's channel -- the stationary fit (red) is flat and misses the
-    modulation, while the WDM blocked-Gibbs fit (blue) tracks the true
-    cyclostationary PSD (black). Centre: the same for the STFT blocked-Gibbs fit
-    (green). Right: posterior of the recovered binary amplitude relative to truth
-    for the two non-stationary fits (violins; median bars, injected value dashed).}
+    \caption{Non-stationary noise, all three observation models. Left: the
+    relative noise-power modulation $S(u)/\langle S\rangle$ in the binary's
+    channel -- the WDM (blue), STFT (green), and dynamic-Whittle (purple, dashed)
+    fits all track the true cyclostationary envelope (black), while a stationary
+    model is flat (red). Right: posterior of the recovered binary amplitude
+    relative to truth for the two phase-retaining fits (violins; median bars,
+    injected value dashed). The dynamic Whittle is power-only and so estimates the
+    noise PSD on the signal-subtracted series.}
     \label{fig:rep_compare}
 \end{figure*}
 
