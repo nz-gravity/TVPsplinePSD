@@ -107,13 +107,13 @@ def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
 
     ax_c.semilogx(durations, np.array([np.mean(a) for a in raw["wc"]]), "o-", color="tab:blue")
     ax_c.semilogx(durations, np.array([np.mean(a) for a in raw["tc"]]), "s--", color="tab:orange")
-    ax_c.axhline(0.9, ls=":", color="black", label="nominal 90\\%")
-    ax_c.set_ylim(0.0, 1.0); ax_c.set_ylabel("90\\% coverage"); ax_c.legend()
+    ax_c.axhline(0.9, ls=":", color="black", label="nominal 90%")
+    ax_c.set_ylim(0.0, 1.0); ax_c.set_ylabel("90% coverage"); ax_c.legend()
 
     _band(ax_w, "ww", "tab:blue", "o-", "WDM")
     _band(ax_w, "tw", "tab:orange", "s--", "Moving periodogram")
     ax_w.set_xscale("log"); ax_w.set_yscale("log")
-    ax_w.set_ylabel(r"90\% CI width on $\log S$ (median, IQR)")
+    ax_w.set_ylabel(r"90% CI width on $\log S$ (median, IQR)")
     ax_w.set_xlabel("Number of observations $n$")
 
     fig.savefig(FIG_DIR / "sim_mse_coverage.png", dpi=200, bbox_inches="tight")

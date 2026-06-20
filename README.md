@@ -84,12 +84,18 @@ The figures used in `notes/ms.tex` are regenerated into `notes/figures/` by:
 # Simulation study (Section 4)
 python notes/scripts/make_sim_study_figures.py        # sim_three_panel, sim_mse_coverage
 
-# LISA demonstration (Section 5): one annual realisation -> all four figures
-# (surface_comparison, tdi_decomposition, gibbs_psd_bias, representation_comparison)
+# LISA demonstration (Section 5): one annual realisation -> non-stationary figures
+# (surface_comparison, gibbs_psd_bias, representation_comparison)
 python notes/scripts/make_lisa_demo.py                # full one-year cyclostationary run
 python notes/scripts/make_lisa_demo.py --quick        # fast smoke configuration
 python notes/scripts/make_lisa_demo.py --render-only  # re-render figures from cached npz
-python studies/lisa_gb/make_corner.py --production    # lisa_gb_stationary_corner (GB posteriors)
+
+# A/E multichannel ensemble (Section 5): unbiased GB amplitude + PSD coverage
+python notes/scripts/make_lisa_ensemble.py            # 12 realisations -> lisa_ensemble
+python notes/scripts/make_lisa_ensemble.py --render-only
+
+# Stationary-noise consistency corner (freq-domain vs WDM GB posteriors, A/E)
+python studies/lisa_gb/make_corner.py --production    # lisa_gb_stationary_corner
 ```
 
 ## Joint signal + noise (global fit)
