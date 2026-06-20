@@ -44,15 +44,18 @@ model -- the Wilson--Daubechies--Meyer (WDM) wavelet transform, the moving
 which therefore become interchangeable. In a simulation study on a locally
 stationary process with known truth, the WDM and moving-periodogram front ends
 recover the time-varying surface with near-nominal credible intervals across a
-range of observation lengths. We then demonstrate the framework on a realistic
-LISA inference problem with a cyclostationary Galactic confusion foreground --
-modulated by the published annual law of Digman \& Cornish -- and an injected
-Galactic binary. A stationary noise model is structurally mis-specified, biasing
-the inferred PSD by the full factor-of-seven annual swing of the foreground;
-all three front ends instead recover the modulation, and a blocked-Gibbs scheme
-that alternates PSD and source updates jointly characterises the binary. The
-result is a modular framework, applicable to any time--frequency representation
-whose coefficients admit a local-power likelihood.
+range of observation lengths. We then demonstrate the framework on simulated
+LISA data with a cyclostationary Galactic confusion foreground, modulated by the
+published annual law of Digman \& Cornish. A stationary noise model is
+structurally mis-specified -- flat in time at the year-averaged level -- whereas
+the WDM and moving-periodogram front ends both recover the full factor-of-seven
+annual modulation of the foreground. Finally, because the same
+Gaussian-coefficient likelihood admits a signal mean, the noise PSD and an
+embedded source can be inferred jointly; we sketch a blocked-Gibbs scheme for
+this and report a proof-of-concept on a Galactic binary, with a full
+massive-black-hole-binary demonstration left as ongoing work. The result is a
+modular framework, applicable to any time--frequency representation whose
+coefficients admit a local-power likelihood.
 \end{abstract}
 
 \maketitle
@@ -124,11 +127,12 @@ likelihood connects several distinct time--frequency data products to the
 \emph{same} PSD model -- the WDM coefficients, the moving-periodogram ordinates,
 and the phase-retaining short-time Fourier coefficients -- so that the front ends
 become interchangeable (Sec.~\ref{sec:obs}). Third, we demonstrate the framework
-in a realistic gravitational-wave application, using simulated LISA data with a
-cyclostationary Galactic foreground and an injected binary: a stationary noise
-model is structurally mis-specified, while the framework recovers the annual
-modulation with all three front ends and supports a joint, blocked-Gibbs
-source-plus-noise fit (Sec.~\ref{sec:lisa}).
+on simulated LISA data with a cyclostationary Galactic foreground: a stationary
+noise model is structurally mis-specified, while the WDM and moving-periodogram
+front ends recover the annual modulation of the noise PSD
+(Sec.~\ref{sec:lisa}). Finally, we show that the same coefficient likelihood
+extends to a joint, blocked-Gibbs fit of the noise PSD and an embedded source,
+and report a proof-of-concept demonstration (Sec.~\ref{sec:gibbs}).
 
 % =====================================================================
 \section{Bayesian model}
@@ -465,31 +469,30 @@ nonetheless preferable for phase-coherent inference in
 Sec.~\ref{sec:discussion}.
 
 % =====================================================================
-\section{LISA demonstration}
+\section{Recovering a non-stationary LISA foreground}
 \label{sec:lisa}
 
-We now demonstrate the framework on a realistic inference problem, where
-non-stationarity matters scientifically. We simulate a full year of LISA data
-containing the cyclostationary Galactic confusion foreground and one injected
-Galactic binary, and perform joint inference of the time-varying noise PSD and
-the source. The non-stationarity is not imposed by hand: the confusion power is
-modulated by the published annual cyclostationary law of
-\citet{digman2022cyclostationary}, derived in the same wavelet domain our
-estimator uses.
+We now apply the framework to simulated LISA data, where the non-stationarity is
+physical rather than imposed. LISA's dominant low-frequency foreground -- the
+unresolved Galactic confusion noise -- is cyclostationary: as the constellation
+orbits the Sun its antenna pattern sweeps across the anisotropic Galaxy,
+modulating the confusion power with an annual period
+\citep{digman2022cyclostationary}. We show that both the WDM and the
+moving-periodogram front ends recover this time-varying noise PSD, which a
+stationary model cannot represent.
 
 \subsection{Simulated data}
 \label{sec:lisa_data}
 
-The data are a single second-generation TDI channel (TDI-X) sampled at interval
-$\Delta t \simeq 200\,\mathrm{s}$ over a one-year observation
-($N \simeq 1.6\times10^{5}$ samples, giving a Nyquist frequency of
-$2.5\,\mathrm{mHz}$), expressed in fractional-frequency units. They combine an
-injected Galactic binary with two independent noise components,
+We simulate one year of a second-generation TDI channel (TDI-X) sampled at
+interval $\Delta t \simeq 200\,\mathrm{s}$ ($N \simeq 1.6\times10^{5}$ samples, a
+Nyquist frequency of $2.5\,\mathrm{mHz}$), in fractional-frequency units. The
+noise has two independent components,
 \begin{equation}
-d(t) = h(t;\bm\theta) + n_{\mathrm{inst}}(t) + \sqrt{r(u)}\,\,n_{\mathrm{gal}}(t),
+n(t) = n_{\mathrm{inst}}(t) + \sqrt{r(u)}\,\,n_{\mathrm{gal}}(t),
 \label{eq:lisa_data}
 \end{equation}
-where $u = t/T_{\mathrm{obs}}\in[0,1]$ is rescaled time. The instrument component
+with $u = t/T_{\mathrm{obs}}\in[0,1]$ rescaled time. The instrument component
 $n_{\mathrm{inst}}$ and the Galactic-confusion component $n_{\mathrm{gal}}$ are
 drawn as independent zero-mean coloured Gaussian processes whose one-sided PSDs
 are the analytic Robson--Cornish--Liu fits~\citep{robson2019sensitivity}
@@ -710,6 +713,51 @@ the source are recovered together, neither biasing the other.
     \label{fig:ensemble}
 \end{figure}
 
+\subsection{Time-localized sources}
+\label{sec:transient}
+
+The robustness of the year-long binary to the noise model is specific to a source
+observed over the \emph{full} modulation cycle. A time-localized source -- a
+burst, or the final days of a massive-black-hole-binary inspiral -- accumulates
+its signal-to-noise at a single epoch, and is therefore measured against the
+\emph{instantaneous} noise, which the cyclostationary foreground varies by a
+factor $\simeq 7$ over the year. We model such a source through its
+frequency-channel coefficient in the phase-retaining STFT front end,
+$c_n = A\,e^{i(\phi_0 + 2\pi\,\delta\! f\, t_n)}\,W(u_n) + \mathrm{noise}_n$, with
+$W$ a localized envelope and $\mathrm{noise}_n$ of local variance $S(u_n, f_0)$,
+and infer $(\delta\! f, A, \phi_0)$ with NUTS under two noise models: the
+\emph{stationary frequency-domain Whittle} (a single, time-averaged PSD) and the
+\emph{WDM P-spline time-varying PSD} (the per-epoch noise our estimator provides).
+
+The two analyses give markedly different posteriors
+(Fig.~\ref{fig:transient}). For a transient at a confusion \emph{minimum} -- a
+quiet epoch -- the WDM time-varying PSD recognises the low local noise and returns
+a posterior a factor $\simeq 2$ tighter than the stationary Whittle in every
+parameter, both centred on the truth: using the time-varying PSD roughly halves
+the parameter uncertainties the stationary analysis would report. The behaviour at
+a confusion \emph{maximum} is the dual of this: there the stationary model
+\emph{underestimates} the local noise and becomes overconfident, its $90\%$
+credible region containing the truth only $0.77$ of the time against the $0.88$ of
+the non-stationary model (over $300$ realizations; nominal $0.90$). The stationary
+model is thus mis-calibrated at noisy epochs and needlessly imprecise at quiet
+ones, while the time-varying PSD is calibrated and optimal at both. This is the
+complement of the resolved-binary global fit: for sources whose information is
+localized in time, modelling the non-stationarity is what makes the source
+inference both correct and maximally informative.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/lisa_transient_corner.png}
+    \caption{Parameter posteriors for a time-localized source at a quiet
+    (confusion-minimum) epoch, inferred with the stationary frequency-domain
+    Whittle (red, dashed) and the WDM P-spline time-varying PSD (green, solid);
+    truth in grey. By weighting the source against the low local noise, the
+    time-varying PSD yields a posterior a factor $\simeq 2$ tighter in every
+    parameter. (At a confusion maximum the roles reverse and the stationary model
+    is instead overconfident -- $90\%$ coverage $0.77$ versus $0.88$.)}
+    \label{fig:transient}
+\end{figure}
+
 % =====================================================================
 \section{Discussion}
 \label{sec:discussion}
@@ -745,9 +793,13 @@ search, leaving the blocked structure unchanged. Beyond a single source, the sam
 coefficient likelihood supports multi-source and multi-channel joint fits, and
 relaxing the diagonal approximation to a correlated-coefficient likelihood would
 account for the residual nearest-neighbour correlations left by a finitely
-orthogonal transform. Finally, transient and time-localized structure is where
-critically-sampled wavelets should outperform the moving periodogram, a regime we
-leave to future work.
+orthogonal transform. Finally, while a year-long binary's parameters are robust to
+the noise model, time-localized sources are not (Sec.~\ref{sec:transient}): there
+the time-varying PSD is what keeps the source posterior both calibrated and
+maximally informative. Extending this to a full transient waveform -- a
+massive-black-hole-binary merger, the sharply time-localized regime where
+critically-sampled wavelets should also outperform the moving periodogram -- is a
+natural next step.
 
 % =====================================================================
 \section{Conclusion}

@@ -94,6 +94,9 @@ python notes/scripts/make_lisa_demo.py --render-only  # re-render figures from c
 python notes/scripts/make_lisa_ensemble.py            # 12 realisations -> lisa_ensemble
 python notes/scripts/make_lisa_ensemble.py --render-only
 
+# Time-localized source (Section 5): freq-domain Whittle vs WDM time-varying PSD
+python notes/scripts/make_lisa_transient.py           # -> lisa_transient_corner
+
 # Stationary-noise consistency corner (freq-domain vs WDM GB posteriors, A/E)
 python studies/lisa_gb/make_corner.py --production    # lisa_gb_stationary_corner
 ```
