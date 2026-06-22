@@ -12,8 +12,7 @@
 \usepackage{bm}
 \usepackage{graphicx}
 \usepackage{amsthm}
-\usepackage[ruled]{algorithm}
-\usepackage{algpseudocode}
+\usepackage[ruled,linesnumbered]{algorithm2e}
 \usepackage{xcolor}
 \usepackage{hyperref}
 
@@ -258,21 +257,19 @@ Algorithm~\ref{alg:psd} summarizes a single likelihood evaluation.
 \caption{Whitened tensor-product log-P-spline PSD model (one likelihood
 evaluation).}
 \label{alg:psd}
-\begin{algorithmic}[1]
-\State \textbf{Sample smoothing precisions (log scale)}
-       $\log\phi_t,\ \log\phi_f$, with
-       $\phi_t,\phi_f\sim\mathrm{Gamma}(\alpha_\phi,\beta_\phi)$
-\State \textbf{Sample whitened eigen-coefficients} $s_{ab}\sim\mathcal{N}(0,1)$
-\State $d_{ab} \gets \phi_t\lambda^t_a + \phi_f\lambda^f_b$;\quad
-       $Z_{ab} \gets s_{ab}/\sqrt{d_{ab}}$
-       \Comment{$\tau_0$ on the null space}
-\State \textbf{Form log-spline surface}
-       $\bm{\Lambda} \gets (\mathbf{B}_t\mathbf{U}_t)\,\mathbf{Z}\,
-       (\mathbf{B}_f\mathbf{U}_f)^\top$
-\State \textbf{Evaluate observation-model log-likelihood}
-       $\mathcal{L}(\bm{\Lambda})$
-       \Comment{moving periodogram or WDM; Sec.~\ref{sec:obs}}
-\end{algorithmic}
+\textbf{Sample smoothing precisions (log scale)}
+  $\log\phi_t,\ \log\phi_f$, with
+  $\phi_t,\phi_f\sim\mathrm{Gamma}(\alpha_\phi,\beta_\phi)$\;
+\textbf{Sample whitened eigen-coefficients} $s_{ab}\sim\mathcal{N}(0,1)$\;
+$d_{ab} \gets \phi_t\lambda^t_a + \phi_f\lambda^f_b$;\quad
+  $Z_{ab} \gets s_{ab}/\sqrt{d_{ab}}$
+  \tcp*{$\tau_0$ on the null space}
+\textbf{Form log-spline surface}
+  $\bm{\Lambda} \gets (\mathbf{B}_t\mathbf{U}_t)\,\mathbf{Z}\,
+  (\mathbf{B}_f\mathbf{U}_f)^\top$\;
+\textbf{Evaluate observation-model log-likelihood}
+  $\mathcal{L}(\bm{\Lambda})$
+  \tcp*{moving periodogram or WDM; Sec.~\ref{sec:obs}}
 \end{algorithm}
 
 % =====================================================================
