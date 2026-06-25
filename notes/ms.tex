@@ -13,15 +13,17 @@
 \usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{hyperref}
-\usepackage{fontawesome5}
 
 % Software / package names (matches the multivariate P-spline paper convention).
 \newcommand{\project}[1]{\textsf{#1}}
 
-% GitHub source links next to equations (matches the multivariate P-spline paper).
+% GitHub source links next to equations (cf. the multivariate P-spline paper).
+% NOTE: fontawesome5 aborts tectonic 0.16.9 (malloc error), so we render a small
+% text marker instead of the \faGithub octocat. Swap back to fontawesome5 if the
+% build toolchain supports it.
 % TODO: pin to a tagged release instead of main once one is cut.
 \newcommand{\repobase}{https://github.com/nz-gravity/TVPsplinePSD/blob/main}
-\DeclareRobustCommand{\codelink}[1]{\,\href{\repobase/#1}{\mbox{\scalebox{0.65}{\faGithub}}}}
+\DeclareRobustCommand{\codelink}[1]{\,\href{\repobase/#1}{\textsuperscript{\scriptsize\sffamily[src]}}}
 
 % Internal editorial notes / outstanding tasks. Remove before submission.
 \newcommand{\avi}[1]{\textcolor{red}{\textbf{[Avi: #1]}}}
@@ -678,11 +680,7 @@ the nominal $0.90$. We attribute this under-coverage to the diagonal likelihood
 approximation: treating the WDM coefficients as independent neglects the residual
 nearest-neighbour correlations of a finitely-orthogonal transform
 (Sec.~\ref{sec:wdm}), which narrows the posterior band relative to the true
-sampling variability. \avi{Quote the Monte Carlo uncertainty on each coverage
-number (binomial, given the ensemble size $N_{\mathrm{real}}$), and ideally show
-that a crude correlation correction moves coverage toward nominal --- otherwise a
-referee will read 0.78 vs 0.90 as a calibration failure rather than a known,
-bounded approximation error.}
+sampling variability. \avi{we get 0.78 vs 0.90.. probably because few repeated sims? }
 
 \begin{figure*}[t]
     \centering
@@ -736,6 +734,7 @@ the source parameters $\bm\theta$ and the non-stationary noise surface
 $\bm{\Lambda}$ can be inferred \emph{jointly}. We develop a blocked-Gibbs scheme
 for this joint fit and report preliminary results on a Galactic binary (GB)/ massive-black-hole-binary (MBHB) / Stellar-mass black-hole binary (BBH).
 
+\avi{Renate has ideas on how to do this for the moving-periodogram dynamic Whittle... But for now lets focus on the WDM.}
 
 \subsection{Blocked Gibbs scheme}
 \label{sec:gibbs_scheme}
