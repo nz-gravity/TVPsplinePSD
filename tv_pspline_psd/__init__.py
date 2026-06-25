@@ -44,6 +44,7 @@ from .metrics import interval_coverage, mse_log_psd, relative_surface_error  # n
 from .plotting import (  # noqa: E402
     plot_channel_slice,
     plot_surface_comparison,
+    quicklook,
     save_figure,
     set_paper_style,
 )
@@ -85,6 +86,7 @@ __all__ = [
     "interval_coverage",
     "plot_surface_comparison",
     "plot_channel_slice",
+    "quicklook",
     "save_figure",
     "set_paper_style",
 ]
