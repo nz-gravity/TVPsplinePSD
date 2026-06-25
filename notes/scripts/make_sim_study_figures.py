@@ -97,24 +97,32 @@ def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
         ax.plot(durations, med(key), marker, color=color, label=label)
         ax.fill_between(durations, q(key, 25), q(key, 75), color=color, alpha=0.18)
 
-    fig, (ax_m, ax_c, ax_w) = plt.subplots(3, 1, figsize=(6.5, 9.0), sharex=True,
+    from matplotlib.ticker import FixedLocator, NullFormatter
+
+    fig, (ax_m, ax_c, ax_w) = plt.subplots(3, 1, figsize=(3.6, 4.7), sharex=True,
                                            constrained_layout=True)
     _band(ax_m, "wm", "tab:blue", "o-", "WDM")
     _band(ax_m, "tm", "tab:orange", "s--", "Moving periodogram")
     ax_m.set_xscale("log"); ax_m.set_yscale("log")
-    ax_m.set_ylabel(r"$\mathrm{MSE}_{\log f}$ (median, IQR)")
-    ax_m.legend()
+    ax_m.set_ylabel(r"$\mathrm{MSE}_{\log f}$")
+    ax_m.legend(fontsize=8)
 
     ax_c.semilogx(durations, np.array([np.mean(a) for a in raw["wc"]]), "o-", color="tab:blue")
     ax_c.semilogx(durations, np.array([np.mean(a) for a in raw["tc"]]), "s--", color="tab:orange")
     ax_c.axhline(0.9, ls=":", color="black", label="nominal 90%")
-    ax_c.set_ylim(0.0, 1.0); ax_c.set_ylabel("90% coverage"); ax_c.legend()
+    ax_c.set_ylim(0.0, 1.0); ax_c.set_ylabel(r"$90\%$ coverage"); ax_c.legend(fontsize=8)
 
     _band(ax_w, "ww", "tab:blue", "o-", "WDM")
     _band(ax_w, "tw", "tab:orange", "s--", "Moving periodogram")
     ax_w.set_xscale("log"); ax_w.set_yscale("log")
-    ax_w.set_ylabel(r"90% CI width on $\log S$ (median, IQR)")
+    ax_w.set_ylabel(r"$90\%$ CI width on $\log S$")
     ax_w.set_xlabel("Number of observations $n$")
+
+    # Explicit ticks at the four sampled lengths; the sub-decade span otherwise
+    # auto-labels crowded minor ticks.
+    ax_w.xaxis.set_major_locator(FixedLocator(list(durations)))
+    ax_w.xaxis.set_minor_formatter(NullFormatter())
+    ax_w.set_xticklabels([f"{int(d)}" for d in durations])
 
     fig.savefig(FIG_DIR / "sim_mse_coverage.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -139,17 +147,17 @@ def main() -> None:
     data0 = simulate_ls2(nt0 * NF, rng=np.random.default_rng(0))
     rw0, rt0 = _fit_both(data0, nt0, 0, cal_wdm0, cal_tang)
     panels = [
-        (log_f0_common, "True $\\log f_0(t,f)$"),
+        (log_f0_common, r"Truth: $\log f_0(t,f)$"),
         (_to_common(rw0["time_grid"], rw0["freq_grid"],
                     np.log(rw0["psd_mean"] / cal_wdm0[None, :] + 1e-12)),
-         "WDM posterior median"),
+         "WDM"),
         (_to_common(rt0["time_grid"], rt0["freq_grid"],
                     np.log(rt0["psd_mean"] / cal_tang + 1e-12)),
-         "Moving-periodogram posterior median"),
+         "Moving periodogram"),
     ]
     vmin = min(p.min() for p, _ in panels)
     vmax = max(p.max() for p, _ in panels)
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.2), constrained_layout=True, sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(7.1, 2.4), constrained_layout=True, sharey=True)
     for ax, (field, title) in zip(axes, panels):
         mesh = ax.pcolormesh(U_COMMON, F_COMMON, field.T, shading="auto",
                              cmap="viridis", vmin=vmin, vmax=vmax)

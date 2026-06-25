@@ -23,6 +23,13 @@ from .lisa import (
     true_psd_lisa,
 )
 from .galactic_binary import gb_quadratures, gb_signal
+from .sobh import (
+    SOBHParams,
+    lisa_lw_antenna,
+    sobh_optimal_snr,
+    sobh_strain_fd,
+    sobh_strain_td,
+)
 from .lisa_tdi import (
     gb_tdi_signal,
     lisa_tdi_confusion_psd,
@@ -38,6 +45,11 @@ __all__ = [
     "true_psd_ls2",
     "gb_signal",
     "gb_quadratures",
+    "SOBHParams",
+    "sobh_strain_fd",
+    "sobh_strain_td",
+    "sobh_optimal_snr",
+    "lisa_lw_antenna",
     "gb_tdi_signal",
     "simulate_tv_lisa_tdi",
     "true_tv_lisa_tdi_psd",

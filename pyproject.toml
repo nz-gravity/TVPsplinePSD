@@ -20,6 +20,7 @@ lisa = [
     "lisaorbits",
     "gpubackendtools",
     "pandas",
+    "ripplegw",
 ]
 
 [tool.ruff]

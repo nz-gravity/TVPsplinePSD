@@ -27,7 +27,13 @@ from .joint import (  # noqa: E402
     run_gibbs_signal_noise_mcmc,
     run_gibbs_stft_signal_noise_mcmc,
     run_joint_signal_noise_mcmc,
+    run_joint_dL_wdm_mcmc,
+    run_joint_sobh_wdm_mcmc,
     run_multichannel_joint_mcmc,
+)
+from .sobh_signal import (  # noqa: E402
+    build_sobh_wdm_grid,
+    make_sobh_wdm_signal_fn,
 )
 from .moving_periodogram import (  # noqa: E402
     run_tang_dynamic_whittle_mcmc,
@@ -49,6 +55,10 @@ __all__ = [
     "wdm_analysis_coefficients",
     "run_wdm_psd_mcmc",
     "run_joint_signal_noise_mcmc",
+    "run_joint_sobh_wdm_mcmc",
+    "run_joint_dL_wdm_mcmc",
+    "build_sobh_wdm_grid",
+    "make_sobh_wdm_signal_fn",
     "run_gibbs_signal_noise_mcmc",
     "run_gibbs_stft_signal_noise_mcmc",
     "run_multichannel_joint_mcmc",

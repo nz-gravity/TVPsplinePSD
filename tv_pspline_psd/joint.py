@@ -539,6 +539,243 @@ def run_gibbs_stft_signal_noise_mcmc(
     }
 
 
+def _sobh_wdm_model(coeffs, signal_fn, theta_ref, theta_scale,
+                    basis_eig_time, basis_eig_freq,
+                    lam_time, lam_freq, joint_null, config):
+    """Joint nonlinear-SOBH-signal + non-stationary-noise WDM model.
+
+    The signal mean is the WDM transform of a chirping binary, ``signal_fn(theta)``
+    with ``theta = (Mc, tc, ln dL)`` sampled in a non-centered form around the
+    reference ``theta_ref`` with widths ``theta_scale``. Because ``signal_fn`` is
+    jax-differentiable (ripple + jax WDM backend), the source parameters and the
+    whitened P-spline noise surface are sampled together with a single NUTS
+    trajectory.
+    """
+    n_basis_time = basis_eig_time.shape[1]
+    n_basis_freq = basis_eig_freq.shape[1]
+
+    # Non-centered source parameters: Mc and dL are positive (log-offset), tc
+    # additive. theta = (Mc, tc, ln dL).
+    z_mc = numpyro.sample("z_mc", dist.Normal(0.0, 1.0))
+    z_tc = numpyro.sample("z_tc", dist.Normal(0.0, 1.0))
+    z_d = numpyro.sample("z_d", dist.Normal(0.0, 1.0))
+    mc = theta_ref[0] * jnp.exp(theta_scale[0] * z_mc)
+    tc = theta_ref[1] + theta_scale[1] * z_tc
+    ln_dl = theta_ref[2] + theta_scale[2] * z_d
+    theta = jnp.array([mc, tc, ln_dl])
+    signal = signal_fn(theta)
+    numpyro.deterministic("Mc", mc)
+    numpyro.deterministic("tc", tc)
+    numpyro.deterministic("dL", jnp.exp(ln_dl))
+
+    # Whitened tensor-product log-P-spline noise prior (as in pspline_surface_model).
+    phi_time = _sample_log_gamma("phi_time", config.alpha_phi, config.beta_phi,
+                                 config.phi_log_base_scale)
+    phi_freq = _sample_log_gamma("phi_freq", config.alpha_phi, config.beta_phi,
+                                 config.phi_log_base_scale)
+    d = phi_time * lam_time[:, None] + phi_freq * lam_freq[None, :]
+    scale = jnp.where(joint_null, 1.0 / jnp.sqrt(config.null_precision),
+                      1.0 / jnp.sqrt(d + config.ridge_eps))
+    with numpyro.plate("eig_coeffs", n_basis_time * n_basis_freq):
+        s_flat = numpyro.sample("s", dist.Normal(0.0, 1.0))
+    log_psd = basis_eig_time @ (s_flat.reshape((n_basis_time, n_basis_freq)) * scale) @ basis_eig_freq.T
+
+    resid = coeffs - signal
+    numpyro.factor("whittle", -0.5 * jnp.sum(log_psd + resid**2 * jnp.exp(-log_psd)))
+    numpyro.deterministic("log_psd", log_psd)
+
+
+def run_joint_sobh_wdm_mcmc(
+    coeffs: np.ndarray,
+    time_grid: np.ndarray,
+    freq_grid: np.ndarray,
+    signal_fn,
+    theta_ref: np.ndarray,
+    *,
+    config: PSplineConfig,
+    theta_scale: np.ndarray | None = None,
+    n_warmup: int = 500,
+    n_samples: int = 500,
+    num_chains: int = 1,
+    random_seed: int = 7,
+    max_tree_depth: int = 10,
+    target_accept_prob: float = 0.9,
+) -> dict[str, object]:
+    """Joint SOBH source + time-varying noise PSD fit on the WDM grid.
+
+    Args:
+        coeffs: WDM data coefficients ``(n_time, n_freq)`` on the trimmed grid.
+        time_grid, freq_grid: the trimmed analysis grid (from the signal grid).
+        signal_fn: jax closure ``theta=(Mc, tc, ln_dL) -> WDM signal coeffs`` from
+            :func:`tv_pspline_psd.sobh_signal.make_sobh_wdm_signal_fn`.
+        theta_ref: reference ``(Mc, tc, ln_dL)`` (the non-centering centre and the
+            PLS-init point for the noise surface).
+        theta_scale: prior widths ``(sigma_lnMc, sigma_tc, sigma_lnD)``; default
+            ``(0.05, 0.05*T, 0.3)`` with ``T`` inferred from the grid is *not*
+            available here, so a generic ``(0.1, |tc_ref|*0.05+1, 0.5)`` is used.
+    """
+    coeffs = np.asarray(coeffs, dtype=float)
+    theta_ref = np.asarray(theta_ref, dtype=float)
+    if theta_scale is None:
+        theta_scale = np.array([0.1, abs(theta_ref[1]) * 0.05 + 1.0, 0.5])
+    theta_scale = np.asarray(theta_scale, dtype=float)
+
+    freq_unit = freq_grid / np.maximum(freq_grid[-1], 1e-12)
+    B_time, knots_time = create_bspline_basis(
+        time_grid, config.n_interior_knots_time, degree=config.degree_time)
+    B_freq, knots_freq = create_bspline_basis(
+        freq_unit, config.n_interior_knots_freq, degree=config.degree_freq)
+    P_time = create_bspline_roughness_penalty(
+        knots_time, degree=config.degree_time, derivative_order=config.diff_order_time)
+    P_freq = create_bspline_roughness_penalty(
+        knots_freq, degree=config.degree_freq, derivative_order=config.diff_order_freq)
+    whitened = whiten_penalty_pair(P_time, P_freq)
+    basis_eig_time = B_time @ whitened["U_time"]
+    basis_eig_freq = B_freq @ whitened["U_freq"]
+
+    # Warm start: subtract the signal at theta_ref, fit the noise to the residual.
+    signal_ref = np.asarray(signal_fn(jnp.asarray(theta_ref)))
+    resid_ref = coeffs - signal_ref
+    pls_init = initialize_with_penalized_least_squares(
+        resid_ref**2, B_time, B_freq, P_time, P_freq, config)
+    init_sites = whitened_init_values(pls_init, whitened, config)
+    init_sites.update({"z_mc": 0.0, "z_tc": 0.0, "z_d": 0.0})
+
+    kernel = NUTS(_sobh_wdm_model, init_strategy=init_to_value(values=init_sites),
+                  max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob)
+    mcmc = MCMC(kernel, num_warmup=n_warmup, num_samples=n_samples,
+                num_chains=num_chains, chain_method="sequential", progress_bar=False)
+    mcmc.run(
+        random.PRNGKey(random_seed), jnp.asarray(coeffs), signal_fn,
+        jnp.asarray(theta_ref), jnp.asarray(theta_scale),
+        jnp.asarray(basis_eig_time), jnp.asarray(basis_eig_freq),
+        jnp.asarray(whitened["lam_time"]), jnp.asarray(whitened["lam_freq"]),
+        jnp.asarray(whitened["joint_null"]), config,
+        extra_fields=("diverging",))
+    samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
+    lp = samples["log_psd"]
+    return {
+        "mcmc": mcmc,
+        "samples": samples,
+        "time_grid": np.asarray(time_grid),
+        "freq_grid": np.asarray(freq_grid),
+        "Mc": samples["Mc"], "tc": samples["tc"], "dL": samples["dL"],
+        "psd_mean": np.exp(np.mean(lp, axis=0)),
+        "psd_lower": np.exp(np.percentile(lp, 5.0, axis=0)),
+        "psd_upper": np.exp(np.percentile(lp, 95.0, axis=0)),
+        "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
+    }
+
+
+def _wdm_dL_noise_model(coeffs, template, d_ref, ln_dl_ref, ln_dl_scale,
+                        basis_eig_time, basis_eig_freq, lam_time, lam_freq,
+                        joint_null, config):
+    """Distance-only SOBH signal + time-varying-noise WDM model.
+
+    The merger morphology (Mc, tc, ...) is fixed; only the luminosity distance is
+    inferred. Because the strain amplitude scales as ``1/dL``, the WDM signal is
+    exactly ``(d_ref / dL) * template`` for the precomputed WDM ``template`` at a
+    reference distance ``d_ref`` -- no waveform regeneration (and no fragile
+    ripple gradients) inside the sampler. The whitened P-spline noise surface is
+    sampled jointly, exactly as in :func:`_sobh_wdm_model`.
+    """
+    n_bt = basis_eig_time.shape[1]
+    n_bf = basis_eig_freq.shape[1]
+    z = numpyro.sample("z_d", dist.Normal(0.0, 1.0))
+    ln_dl = ln_dl_ref + ln_dl_scale * z
+    signal = (d_ref / jnp.exp(ln_dl)) * template
+    numpyro.deterministic("dL", jnp.exp(ln_dl))
+
+    phi_time = _sample_log_gamma("phi_time", config.alpha_phi, config.beta_phi,
+                                 config.phi_log_base_scale)
+    phi_freq = _sample_log_gamma("phi_freq", config.alpha_phi, config.beta_phi,
+                                 config.phi_log_base_scale)
+    d = phi_time * lam_time[:, None] + phi_freq * lam_freq[None, :]
+    scale = jnp.where(joint_null, 1.0 / jnp.sqrt(config.null_precision),
+                      1.0 / jnp.sqrt(d + config.ridge_eps))
+    with numpyro.plate("eig_coeffs", n_bt * n_bf):
+        s_flat = numpyro.sample("s", dist.Normal(0.0, 1.0))
+    log_psd = basis_eig_time @ (s_flat.reshape((n_bt, n_bf)) * scale) @ basis_eig_freq.T
+
+    resid = coeffs - signal
+    numpyro.factor("whittle", -0.5 * jnp.sum(log_psd + resid**2 * jnp.exp(-log_psd)))
+    numpyro.deterministic("log_psd", log_psd)
+
+
+def run_joint_dL_wdm_mcmc(
+    coeffs: np.ndarray,
+    time_grid: np.ndarray,
+    freq_grid: np.ndarray,
+    template: np.ndarray,
+    d_ref: float,
+    *,
+    config: PSplineConfig,
+    dl_ref: float,
+    dl_scale: float = 0.5,
+    n_warmup: int = 400,
+    n_samples: int = 600,
+    num_chains: int = 1,
+    random_seed: int = 7,
+    max_tree_depth: int = 10,
+    target_accept_prob: float = 0.9,
+) -> dict[str, object]:
+    """Distance-only joint fit: SOBH amplitude + time-varying noise PSD (WDM).
+
+    Args:
+        coeffs: WDM data coefficients ``(n_time, n_freq)`` on the trimmed grid.
+        time_grid, freq_grid: the trimmed analysis grid.
+        template: WDM coefficients of the responded waveform at distance ``d_ref``.
+        d_ref: reference distance of ``template`` (Mpc).
+        dl_ref: prior centre and PLS-init distance.
+    """
+    coeffs = np.asarray(coeffs, dtype=float)
+    template = np.asarray(template, dtype=float)
+
+    freq_unit = freq_grid / np.maximum(freq_grid[-1], 1e-12)
+    B_time, knots_time = create_bspline_basis(
+        time_grid, config.n_interior_knots_time, degree=config.degree_time)
+    B_freq, knots_freq = create_bspline_basis(
+        freq_unit, config.n_interior_knots_freq, degree=config.degree_freq)
+    P_time = create_bspline_roughness_penalty(
+        knots_time, degree=config.degree_time, derivative_order=config.diff_order_time)
+    P_freq = create_bspline_roughness_penalty(
+        knots_freq, degree=config.degree_freq, derivative_order=config.diff_order_freq)
+    whitened = whiten_penalty_pair(P_time, P_freq)
+    basis_eig_time = B_time @ whitened["U_time"]
+    basis_eig_freq = B_freq @ whitened["U_freq"]
+
+    signal_ref = (d_ref / dl_ref) * template
+    resid_ref = coeffs - signal_ref
+    pls_init = initialize_with_penalized_least_squares(
+        resid_ref**2, B_time, B_freq, P_time, P_freq, config)
+    init_sites = whitened_init_values(pls_init, whitened, config)
+    init_sites["z_d"] = 0.0
+
+    kernel = NUTS(_wdm_dL_noise_model, init_strategy=init_to_value(values=init_sites),
+                  max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob)
+    mcmc = MCMC(kernel, num_warmup=n_warmup, num_samples=n_samples,
+                num_chains=num_chains, chain_method="sequential", progress_bar=False)
+    mcmc.run(
+        random.PRNGKey(random_seed), jnp.asarray(coeffs), jnp.asarray(template),
+        float(d_ref), float(np.log(dl_ref)), float(dl_scale),
+        jnp.asarray(basis_eig_time), jnp.asarray(basis_eig_freq),
+        jnp.asarray(whitened["lam_time"]), jnp.asarray(whitened["lam_freq"]),
+        jnp.asarray(whitened["joint_null"]), config,
+        extra_fields=("diverging",))
+    samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
+    lp = samples["log_psd"]
+    return {
+        "samples": samples,
+        "time_grid": np.asarray(time_grid),
+        "freq_grid": np.asarray(freq_grid),
+        "dL": samples["dL"],
+        "psd_mean": np.exp(np.mean(lp, axis=0)),
+        "psd_lower": np.exp(np.percentile(lp, 5.0, axis=0)),
+        "psd_upper": np.exp(np.percentile(lp, 95.0, axis=0)),
+        "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
+    }
+
+
 def _multichannel_joint_model(coeffs, templates, basis_eig_time, basis_eig_freq,
                               lam_time, lam_freq, joint_null, amp_scale, config):
     """Per-channel noise surfaces with one shared signal amplitude vector.

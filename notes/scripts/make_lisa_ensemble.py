@@ -162,7 +162,7 @@ def render(fig_dir: Path, d) -> None:
     set_paper_style()
     ratios = np.asarray(d["ratios"]); cov_A = np.asarray(d["cov_A"]); cov_E = np.asarray(d["cov_E"])
     n = len(ratios)
-    fig, (ax_a, ax_c) = plt.subplots(1, 2, figsize=(11, 4.2), constrained_layout=True)
+    fig, (ax_a, ax_c) = plt.subplots(1, 2, figsize=(7.1, 3.0), constrained_layout=True)
 
     # Amplitude recovery across realizations.
     parts = ax_a.violinplot([ratios], positions=[0], widths=0.6, showmeans=False,

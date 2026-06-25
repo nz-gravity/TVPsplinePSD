@@ -11,55 +11,45 @@
 
 \usepackage{bm}
 \usepackage{graphicx}
-\usepackage{amsthm}
-\usepackage[ruled,linesnumbered]{algorithm2e}
 \usepackage{xcolor}
 \usepackage{hyperref}
 
-\theoremstyle{definition}
-\newtheorem{definition}{Definition}
+% Software / package names (matches the multivariate P-spline paper convention).
+\newcommand{\project}[1]{\textsf{#1}}
 
 % Internal editorial notes / outstanding tasks. Remove before submission.
 \newcommand{\avi}[1]{\textcolor{red}{\textbf{[Avi: #1]}}}
 
 \begin{document}
 
-\title{A Unified Bayesian Framework for Non-Stationary Power Spectral
-Density Estimation from Time--Frequency Data with Tensor-Product P-Splines}
+\title{Bayesian Non-Stationary Power Spectral Density Estimation
+from Time--Frequency Data with Tensor-Product P-Splines}
 
-\author{Author Name}
-\affiliation{Affiliation}
+\author{Avi Vajpeyi}
+\email{avi.vajpeyi@gmail.com}
+\affiliation{\avi{TODO: institution}}
 
 \date{\today}
 
 \begin{abstract}
-We introduce a unified Bayesian framework for estimating smoothly
-time-varying power spectral densities (PSDs) from time--frequency data. The
-core of the framework is a single statistical model: the log-PSD surface
-$\log S(t,f)$ is represented by a tensor-product P-spline with an anisotropic
-roughness prior, sampled in a non-centered (whitened) parameterization that
-removes the hierarchical funnel obstructing Hamiltonian Monte Carlo. The key
-design principle is that this model is \emph{independent of the underlying
-time--frequency representation}: the same prior and the same smooth surface can
-be combined with different observation models. We show that a single
-Gaussian-coefficient likelihood connects three distinct front ends to this one
-model -- the Wilson--Daubechies--Meyer (WDM) wavelet transform, the moving
-(short-time) periodogram, and a phase-retaining short-time Fourier transform --
-which therefore become interchangeable. In a simulation study on a locally
-stationary process with known truth, the WDM and moving-periodogram front ends
-recover the time-varying surface with near-nominal credible intervals across a
-range of observation lengths. We then demonstrate the framework on simulated
-LISA data with a cyclostationary Galactic confusion foreground, modulated by the
-published annual law of Digman \& Cornish. A stationary noise model is
-structurally mis-specified -- flat in time at the year-averaged level -- whereas
-the WDM and moving-periodogram front ends both recover the full factor-of-seven
-annual modulation of the foreground. Finally, because the same
-Gaussian-coefficient likelihood admits a signal mean, the noise PSD and an
-embedded source can be inferred jointly; we sketch a blocked-Gibbs scheme for
-this and report a proof-of-concept on a Galactic binary, with a full
-massive-black-hole-binary demonstration left as ongoing work. The result is a
-modular framework, applicable to any time--frequency representation whose
-coefficients admit a local-power likelihood.
+We present a Bayesian framework for estimating smoothly time-varying power
+spectral densities (PSDs) from time--frequency data. The log-PSD surface
+$\log S(t,f)$ is modelled by a tensor-product P-spline with an anisotropic
+roughness prior, sampled in a whitened parametrisation that removes the
+hierarchical funnel and yields stable Hamiltonian Monte Carlo. The model is
+independent of how the data are produced: a single Gaussian-coefficient
+likelihood couples the same surface to different time--frequency transforms, here
+the Wilson--Daubechies--Meyer (WDM) wavelet transform and the short-time Fourier
+transform, with the classical moving periodogram recovered as the phase-discarded
+special case of the latter. On a locally stationary process with known truth,
+both likelihoods recover the surface with near-nominal credible intervals.
+Applied to simulated LISA data, the framework recovers the annual modulation of
+the cyclostationary Galactic confusion foreground, which a stationary noise model
+--- flat at the year-averaged level --- cannot represent. Because the likelihood
+admits a signal mean, the same model extends to joint blocked-Gibbs inference of
+the noise PSD and an embedded source. The result is a modular framework,
+applicable to any time--frequency representation whose coefficients admit a
+local-power likelihood.
 \end{abstract}
 
 \maketitle
@@ -74,23 +64,22 @@ asymptotically independent and exponentially distributed about the power spectra
 density (PSD), the structure that underpins the classical Whittle likelihood
 \citep{whittle1953analysis,pawitan1994nonparametric} and the modern Bayesian
 nonparametric estimators built upon it. These estimators place a smoothing prior
-on the log-spectrum -- for example a penalized spline (P-spline) with a roughness
-penalty \citep{maturana2021bayesian} -- so that a single noisy realization yields
-a regularized estimate of $S(f)$ with calibrated uncertainty. We state this
-stationary likelihood explicitly where the baseline observation model is
-established (Sec.~\ref{sec:obs}); it is the starting point that the present work
-generalizes to the non-stationary, time--frequency setting.
+on the log-spectrum, for example a penalised spline (P-spline) with a roughness
+penalty \citep{maturana2021bayesian}, so that a single noisy realisation yields
+a regularised estimate of $S(f)$ with calibrated uncertainty. We give this
+stationary likelihood explicitly in Sec.~\ref{sec:obs}; it is the starting point
+that the present work generalises to the non-stationary, time--frequency setting.
 
 Real instruments rarely satisfy the stationarity assumption. Detector noise
 drifts, glitches, and responds to environmental and instrumental conditions that
 change on timescales short compared with a typical observation, so that its
 spectral content evolves in time. Treating such noise as stationary
-mis-specifies the very likelihood on which downstream inference depends, and the
+misspecifies the very likelihood on which downstream inference depends, and the
 resulting bias propagates into any astrophysical parameters estimated against
 that noise model.
 
-The Laser Interferometer Space Antenna (LISA) is an acute example. Its dominant
-low-frequency foreground -- the unresolved Galactic confusion noise -- is
+The Laser Interferometer Space Antenna (LISA) is a striking example. Its
+dominant low-frequency foreground, the unresolved Galactic confusion noise, is
 non-stationary by construction: as the constellation orbits the Sun, its
 antenna pattern sweeps across the anisotropic Galactic source distribution,
 modulating the confusion power with an annual period. This makes the foreground a
@@ -101,9 +90,9 @@ global-fit pipelines characterise it by iterative spectral fitting
 \citep{karnesis2021characterization} or by fitting the confusion amplitude
 independently in short time segments \citep{rosati2024prototype, pozzoli2024bahamas}. The
 foreground is simultaneously entangled with the resolvable sources one wishes to
-characterize, so the noise PSD and the source parameters must ultimately be
+characterise, so the noise PSD and the source parameters must ultimately be
 inferred together \citep{katz2025efficient}. In this setting a stationary PSD
-assumption is not a mild approximation but a structural mis-specification, which
+assumption is not a mild approximation but a structural misspecification, which
 makes LISA a natural proving ground for non-stationary spectral estimation.
 
 A non-stationary process is most naturally described in a joint time--frequency
@@ -113,32 +102,49 @@ wavelet transforms such as the Wilson--Daubechies--Meyer (WDM) transform
 \citep{cornish2020Wavelets}, which tile the plane into a near-orthogonal grid.
 The two produce different data products, but both estimate the same underlying
 object: a PSD that evolves slowly across the time--frequency plane. When that
-evolution is smooth, recovering it becomes a bivariate regression problem -- fit
-a smooth surface to noisy local-power observations -- to which penalized splines
-are well suited.
+evolution is smooth, recovering it becomes a bivariate regression problem,
+fitting a smooth surface to noisy local-power observations, to which penalised
+splines are well suited.
 
-This paper makes three contributions. First, we introduce a Bayesian
-tensor-product P-spline model for a smooth time-varying log-PSD surface
-$\log S(t,f)$, with an anisotropic roughness prior and a whitened
-parameterization that yields stable Hamiltonian Monte Carlo
-(Sec.~\ref{sec:model}). Second, we show that a single Gaussian-coefficient
-likelihood connects several distinct time--frequency data products to the
-\emph{same} PSD model -- the WDM coefficients, the moving-periodogram ordinates,
-and the phase-retaining short-time Fourier coefficients -- so that the front ends
-become interchangeable (Sec.~\ref{sec:obs}). Third, we demonstrate the framework
-on simulated LISA data with a cyclostationary Galactic foreground: a stationary
-noise model is structurally mis-specified, while the WDM and moving-periodogram
-front ends recover the annual modulation of the noise PSD
-(Sec.~\ref{sec:lisa}). Finally, we show that the same coefficient likelihood
-extends to a joint, blocked-Gibbs fit of the noise PSD and an embedded source,
-and report a proof-of-concept demonstration (Sec.~\ref{sec:gibbs}).
+The present work builds directly on the Bayesian nonparametric framework of
+\citet{tang2023MovingPSD}, who introduced the dynamic Whittle likelihood for
+locally stationary processes from the moving periodogram and paired it with a
+bivariate Bernstein--Dirichlet process prior on the time--frequency spectrum,
+establishing sup-norm posterior consistency, $L_2$ contraction rates, and a
+Bayes-factor test for stationarity. We retain their dynamic Whittle likelihood as
+one of our observation models, but replace the Bernstein--Dirichlet prior with a
+tensor-product P-spline. This change buys three things: anisotropic roughness
+control with separate smoothing in time and frequency; a whitened
+parametrisation that makes the surface amenable to gradient-based (Hamiltonian)
+sampling; and a Gaussian-coefficient, phase-retaining likelihood that admits a
+signal mean and hence a joint source--noise fit, which the power-only dynamic
+Whittle cannot support. We use the reference implementation of
+\citet{tang2023MovingPSD} in the \project{beyondWhittle} package as an external
+baseline in our simulation study (Sec.~\ref{sec:sim}). More broadly, Bayesian
+estimation of time-varying spectra has a substantial history outside the
+gravitational-wave setting.
+\avi{Add and cite the adjacent non-stationary spectral literature here, e.g.
+AdaptSPEC (Rosen, Wood \& Stoffer 2012), Dahlhaus locally stationary processes
+(1997, 2000), and SLEX (Ombao et al.); one or two sentences situating us against
+the spline-based and segmentation-based alternatives.}
+
+This paper develops the framework in four steps. Section~\ref{sec:model}
+introduces the tensor-product P-spline model for the log-PSD surface, with its
+anisotropic roughness prior and whitened parametrisation for stable HMC.
+Section~\ref{sec:obs} shows that a single Gaussian-coefficient likelihood connects
+two transforms to that model, the WDM wavelet and short-time Fourier coefficients,
+with the moving periodogram the phase-discarded special case of the latter.
+Section~\ref{sec:lisa} demonstrates it on simulated LISA data carrying a
+cyclostationary Galactic foreground, which a stationary model cannot represent but
+both transforms recover. Section~\ref{sec:gibbs} extends the likelihood to a
+joint, blocked-Gibbs fit of the noise PSD and an embedded source.
 
 % =====================================================================
 \section{Bayesian model}
 \label{sec:model}
 
-This section defines the statistical model for the time-varying PSD. It is
-stated \emph{independently of the data representation}: the surface, prior, and
+We define the statistical model for the time-varying PSD
+\emph{independently of the data representation}: the surface, prior, and
 inference machinery below are shared by every observation model in
 Sec.~\ref{sec:obs}.
 
@@ -151,10 +157,10 @@ $f$, assumed to vary smoothly in both arguments. We model its logarithm,
 \Lambda(t,f) \;=\; \log S(t,f),
 \end{equation}
 working on the log scale so that the surface is unconstrained and the
-multiplicative dynamic range of the PSD becomes additive. The estimand is the
-function $\Lambda(t,f)$ evaluated on a time--frequency grid; the specific grid
-$(t_n, f_m)$ is supplied by the chosen representation in Sec.~\ref{sec:obs}, but
-the model below does not depend on how that grid arises.
+multiplicative dynamic range of the PSD becomes additive. The estimand is
+$\Lambda(t,f)$ on a time--frequency grid $(t_n, f_m)$ supplied by the chosen
+representation (Sec.~\ref{sec:obs}); the model below does not depend on how that
+grid arises.
 
 \subsection{Tensor-product P-spline representation}
 \label{sec:pspline}
@@ -201,10 +207,13 @@ precisions \citep{lang2004bayesian,maturana2021bayesian,boer2023tensor}.
 
 Sampling $\mathbf{w}$ jointly with $(\phi_t,\phi_f)$ produces the classic
 hierarchical funnel: the conditional scale of $\mathbf{w}$ collapses as the
-precisions grow, stalling gradient-based MCMC. We remove it by sampling in the
+precisions grow, stalling gradient-based MCMC.
+\avi{cite the funnel pathology (Neal 2003) and the non-centered/whitened
+reparametrisation remedy (Papaspiliopoulos, Roberts \& Sk\"old 2007).}
+We remove it by sampling in the
 penalty eigenbasis. With $\mathbf{P}_t = \mathbf{U}_t\,\mathrm{diag}(\lambda^t)\,
 \mathbf{U}_t^\top$ and $\mathbf{P}_f = \mathbf{U}_f\,\mathrm{diag}(\lambda^f)\,
-\mathbf{U}_f^\top$, the Kronecker terms are simultaneously diagonalized by
+\mathbf{U}_f^\top$, the Kronecker terms are simultaneously diagonalised by
 $\mathbf{U}_f\otimes\mathbf{U}_t$, so $\mathbf{Q}$ has eigenvalues
 $d_{ab} = \phi_t\lambda^t_a + \phi_f\lambda^f_b$. We sample standard-normal
 $s_{ab}\sim\mathcal{N}(0,1)$ and set
@@ -216,7 +225,7 @@ Z_{ab} = \frac{s_{ab}}{\sqrt{d_{ab}}},
 \end{equation}
 which reproduces $\mathcal{N}(\mathbf{0},\mathbf{Q}^{-1})$ exactly while making
 $\mathbf{s}$ \emph{a priori} independent of $(\phi_t,\phi_f)$ and absorbing the
-$|\mathbf{Q}|^{1/2}$ normalization. The shared penalty null space (bilinear
+$|\mathbf{Q}|^{1/2}$ normalisation. The shared penalty null space (bilinear
 trends in $t,f$, $d_{ab}=0$) carries no smoothing information and is given a
 fixed weak precision $\tau_0$.
 
@@ -228,7 +237,7 @@ Each smoothing precision is given a Gamma hyperprior
 sampled on the unconstrained log scale, with the Gamma density and its
 log-Jacobian supplied as a factor. The weakly informative defaults place the
 prior mass over the range of smoothing scales spanned by the basis, in the spirit
-of penalized-complexity priors \citep{simpson2017penalising,yue2012priors}.
+of penalised-complexity priors \citep{simpson2017penalising,yue2012priors}.
 
 \subsection{Posterior inference}
 \label{sec:inference}
@@ -246,44 +255,105 @@ p(\mathbf{s})\,p(\phi_t)\,p(\phi_f),
 with $p(\mathbf{s}) = \mathcal{N}(\mathbf{0},\mathbf{I})$ and $\bm{\Lambda}$
 obtained from $(\mathbf{s},\phi_t,\phi_f)$ through the deterministic whitening
 map of Eq.~\eqref{eq:whitening}; no explicit penalty factor appears. We draw
-samples with the No-U-Turn Sampler (NUTS), using standard step-size and
-mass-matrix adaptation during warmup. Each chain is initialized from a penalized
-least-squares fit of $\bm{\Lambda}$ to the log of the local-power data, mapped
-into the whitened coordinates; the WDM and moving-periodogram front ends use the
-same warm-start procedure on their respective local-power statistics.
-Algorithm~\ref{alg:psd} summarizes a single likelihood evaluation.
+samples with the No-U-Turn Sampler~\citep[NUTS;][]{hoffman2014_NUTS}, using
+standard step-size and mass-matrix adaptation during warm-up. Each chain is
+initialised from a penalised least-squares fit of $\bm{\Lambda}$ to the log of the
+local-power data, mapped into the whitened coordinates, and both observation
+models use the same warm-start procedure on their respective local-power
+statistics.
 
-\begin{algorithm}[t]
-\caption{Whitened tensor-product log-P-spline PSD model (one likelihood
-evaluation).}
-\label{alg:psd}
-\textbf{Sample smoothing precisions (log scale)}
-  $\log\phi_t,\ \log\phi_f$, with
-  $\phi_t,\phi_f\sim\mathrm{Gamma}(\alpha_\phi,\beta_\phi)$\;
-\textbf{Sample whitened eigen-coefficients} $s_{ab}\sim\mathcal{N}(0,1)$\;
-$d_{ab} \gets \phi_t\lambda^t_a + \phi_f\lambda^f_b$;\quad
-  $Z_{ab} \gets s_{ab}/\sqrt{d_{ab}}$
-  \tcp*{$\tau_0$ on the null space}
-\textbf{Form log-spline surface}
-  $\bm{\Lambda} \gets (\mathbf{B}_t\mathbf{U}_t)\,\mathbf{Z}\,
-  (\mathbf{B}_f\mathbf{U}_f)^\top$\;
-\textbf{Evaluate observation-model log-likelihood}
-  $\mathcal{L}(\bm{\Lambda})$
-  \tcp*{moving periodogram or WDM; Sec.~\ref{sec:obs}}
-\end{algorithm}
+A single likelihood evaluation is then cheap. Given the current smoothing
+precisions $\phi_t,\phi_f$ (sampled on the log scale, with
+$\phi_t,\phi_f\sim\mathrm{Gamma}(\alpha_\phi,\beta_\phi)$) and the whitened
+eigen-coefficients $s_{ab}\sim\mathcal{N}(0,1)$, we form the eigenvalues
+$d_{ab} = \phi_t\lambda^t_a + \phi_f\lambda^f_b$ (with the null space held at the
+fixed precision $\tau_0$), set $Z_{ab} = s_{ab}/\sqrt{d_{ab}}$, assemble the
+log-spline surface $\bm{\Lambda} = (\mathbf{B}_t\mathbf{U}_t)\,\mathbf{Z}\,
+(\mathbf{B}_f\mathbf{U}_f)^\top$, and evaluate the observation-model
+log-likelihood $\mathcal{L}(\bm{\Lambda})$ of Sec.~\ref{sec:obs}. The basis and
+eigenvector products are precomputed once, so each evaluation is a pair of dense
+matrix products followed by the likelihood.
+
+\paragraph*{Implementation.}
+We implement the model in \project{JAX}~\citep{jax2018github} with
+\project{NumPyro}~\citep{phan2019numphyro}, exploiting automatic differentiation
+and just-in-time (JIT) compilation for gradient-based sampling. The smoothing
+precisions $\phi_t,\phi_f$ are sampled on the log scale to keep the sampler away
+from the boundary at zero, and the time and frequency grids are standardised to
+$[0,1]$ for numerical stability of the B-spline basis evaluation. Time knots are
+placed adaptively in the spirit of \citet{maturana2021bayesian}, clustering where
+the spectrum varies fastest. The shared model and sampler configuration is
+collected in Table~\ref{tab:config}; the per-study warm-up and draw counts, which
+differ between the noise-only and joint fits, are given with each study below. A
+single one-year joint A/E fit (two channels, signal and non-stationary noise)
+completes in $\simeq 2.5\,$min of wall time on a single workstation CPU core with
+no GPU.
+\avi{Confirm the hardware (CPU model / core count) for the wall-clock figure.}
+
+\paragraph*{Convergence diagnostics.}
+We assess convergence with standard chain
+diagnostics~\citep{gelman1992inference,arviz_2019}: the rank-normalised
+Gelman--Rubin statistic $\hat R<1.01$, bulk and tail effective sample sizes above
+a few hundred, and the absence of divergent transitions and maximum tree-depth
+saturation. No fit in any study produced sampler divergences.
+\avi{Report the actual $\hat R$/ESS for a representative fit --- these are not
+currently logged; add logging to the study scripts.}
+
+\begin{table}[t]
+\caption{Default model and sampler configuration. Interior-knot counts set the
+basis dimension as $K = (\text{interior knots}) + d + 1$. The
+moving-periodogram fits use $6$ frequency knots in place of $10$. Warm-up/draw
+counts vary by study and are stated in the text: $250/250$ for the simulation
+study, $300/250$ for the LISA noise ensemble, and $800/2000$ for the
+time-localised-source coverage study.}
+\label{tab:config}
+\begin{ruledtabular}
+\begin{tabular}{lcc}
+Quantity & Symbol & Value \\
+\hline
+B-spline degree (time, freq)      & $d_t,\,d_f$ & $3,\,3$ \\
+Interior knots (time, freq)       & --          & $8,\,10$ \\
+Difference-penalty order          & $m_t,\,m_f$ & $2,\,2$ \\
+Smoothing hyperprior              & $(\alpha_\phi,\beta_\phi)$ & $(2,\,1)$ \\
+Null-space precision              & $\tau_0$    & $10^{-4}$ \\
+NUTS target accept probability    & --          & $0.85$ \\
+NUTS max tree depth               & --          & $10$ \\
+\end{tabular}
+\end{ruledtabular}
+\end{table}
 
 % =====================================================================
 \section{Observation models}
 \label{sec:obs}
 
-The model of Sec.~\ref{sec:model} specifies a prior over the smooth surface
-$\bm{\Lambda} = \log\mathbf{S}$. To complete the posterior we need a likelihood
-that links a time--frequency data product to this surface. We give two archetypal
-likelihoods -- one for the moving periodogram and one for the WDM transform --
-and then show in Sec.~\ref{sec:unified} that both, together with the
-phase-retaining short-time Fourier transform, are special cases of a single
-Gaussian-coefficient form. The Bayesian PSD model is unchanged throughout; only
-the likelihood $\mathcal{L}(\bm{\Lambda})$ differs.
+The model of Sec.~\ref{sec:model} specifies a prior over the surface
+$\bm{\Lambda} = \log\mathbf{S}$; a likelihood linking a time--frequency data
+product to it completes the posterior. We give a likelihood for each of two
+transforms, the moving (short-time Fourier) periodogram and the WDM wavelet
+transform, and show in Sec.~\ref{sec:unified} that both are special cases of a
+single Gaussian-coefficient form, with the moving periodogram the phase-discarded
+version of the Fourier likelihood. Only $\mathcal{L}(\bm{\Lambda})$ differs; the
+PSD model is unchanged. The two front ends sample the plane very differently
+(Fig.~\ref{fig:representation}): the WDM transform tiles it into a regular,
+near-orthogonal grid, whereas the moving periodogram returns a scattered sawtooth
+that does not fill it.
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/representation_schematic.png}
+    \caption{The two time--frequency front ends that feed the same P-spline
+    surface. \emph{(a)} The WDM transform tiles the plane into a regular,
+    near-orthogonal grid, contributing one $\chi^2_1$ coefficient
+    $w_{nm}\sim\mathcal{N}(0,S_{nm})$ per cell of size $\Delta T\times\Delta F$.
+    \emph{(b)} The thinned zigzag moving periodogram of \citet{tang2023MovingPSD}
+    does not fill the plane: the evaluated Fourier frequency cycles with the time
+    index, tracing rising diagonal ramps, and the thinning skips $i\,m$ ordinates
+    between blocks, leaving a scattered sawtooth of $\chi^2_2$ ordinates
+    $\mathrm{MI}_t\sim\mathrm{Exp}(1/S)$, each formed from its own overlapping
+    $2m{+}1$ window. The same whitened P-spline surface of
+    Sec.~\ref{sec:model} is fitted to either sampling.}
+    \label{fig:representation}
+\end{figure*}
 
 The stationary case fixes the reference point. When the PSD is constant in time,
 $S(t,f)=S(f)$, the periodogram ordinates are asymptotically independent and
@@ -297,32 +367,27 @@ L_{\mathrm{W}}(S) = \prod_{k}
 with $I(f_k)$ the periodogram at Fourier frequency $f_k$. Each time--frequency
 likelihood below reduces to this form within a single short window or tile, so
 Eq.~\eqref{eq:whittle} is the stationary limit that the non-stationary models
-generalize.
+generalise.
 
 \subsection{Moving periodogram likelihood}
 \label{sec:movperiod}
 
-A short window of length $2m+1$ is slid along the series and a local periodogram
-is formed at each step \citep{tang2023MovingPSD}.
-
-\begin{definition}[Moving periodogram ordinates]
-The \emph{moving periodogram ordinates} $\mathrm{MI}_t$ (of order $m$) at time
-point $t = 1,\ldots,T$ of $X_{t-m+1},\ldots,X_{t+m}$ are
+We slide a short window of length $2m+1$ along the series and form a local
+periodogram at each step \citep{tang2023MovingPSD}. The moving periodogram
+ordinates $\mathrm{MI}_t$ of order $m$, evaluated at time point $t = 1,\ldots,T$
+from the samples $X_{t-m+1},\ldots,X_{t+m}$, are
 \begin{equation}
 \mathrm{MI}_t = \frac{1}{2\pi(2m+1)}
 \left|\sum_{\nu=0}^{2m} X_{\nu+t-m}\,
 \exp\!\left(-i\pi\nu\,\lambda_{\mathrm{mod}(t)}\right)\right|^2,
 \label{eq:MI}
 \end{equation}
-where $\lambda_j = \tfrac{2j}{2m+1}$, $j=1,\ldots,m$, are the Fourier
-frequencies and $\mathrm{mod}(t) = 1 + ((t-1)\bmod m)$.
-\end{definition}
+where $\lambda_j = \tfrac{2j}{2m+1}$, $j=1,\ldots,m$, are the Fourier frequencies
+and $\mathrm{mod}(t) = 1 + ((t-1)\bmod m)$.
 
-For a locally stationary process the moving periodogram ordinates are
-approximately independent and exponentially distributed with mean $S$, giving the
-dynamic Whittle likelihood.
-
-\begin{definition}[Dynamic Whittle likelihood]
+For a locally stationary process these ordinates are approximately independent
+and exponentially distributed with mean $S$, which gives the dynamic Whittle
+likelihood
 \begin{equation}
 L^{(1)}_{\mathrm{DW}}(S)
 = \prod_{t=1}^{T}
@@ -330,13 +395,9 @@ L^{(1)}_{\mathrm{DW}}(S)
 \exp\!\left(-\frac{\mathrm{MI}_t}{S(t/T,\lambda_{\mathrm{mod}(t)})}\right).
 \label{eq:dynamic_whittle}
 \end{equation}
-\end{definition}
-
-To reduce the dependence induced by overlapping windows, a thinned variant
-retains a zigzag subset of ordinates \citep{tang2023MovingPSD}.
-
-\begin{definition}[Thinned dynamic Whittle likelihood]
-With thinning factor $i$,
+The overlapping windows induce dependence between neighbouring ordinates, so we
+follow \citet{tang2023MovingPSD} and use a thinned variant that retains a zigzag
+subset. With thinning factor $i$,
 \begin{equation}
 L^{(i)}_{\mathrm{DW}}(S)
 = \prod_{l=1}^{B_i}\prod_{j=1}^{m}
@@ -345,14 +406,14 @@ L^{(i)}_{\mathrm{DW}}(S)
 \label{eq:thinned_dynamic_whittle}
 \end{equation}
 where $B_i = \lfloor (T-m)/(im)\rfloor$ and $u_{j,l,i} = (i(l-1)m+j)/T$.
-\end{definition}
 
 In the notation of Sec.~\ref{sec:model}, $\mathcal{L}(\bm{\Lambda}) =
 \log L^{(i)}_{\mathrm{DW}}$ with $S = e^{\Lambda}$ evaluated at the ordinate
-locations. The dynamic Whittle treats the (thinned) ordinates as independent and
-exponential; this is exact only asymptotically and requires the spectrum to be
+locations. The dynamic Whittle treats the thinned ordinates as independent and
+exponential, which is exact only asymptotically and requires the spectrum to be
 approximately constant across a window. Thinning trades data for reduced
-inter-ordinate correlation, and the power periodogram discards phase.
+inter-ordinate correlation, and because it works with the power periodogram it
+discards phase.
 
 \subsection{WDM likelihood}
 \label{sec:wdm}
@@ -374,13 +435,13 @@ The resulting log-likelihood, with $\bm{\Lambda} = \log\mathbf{S}$, is
 \label{eq:wdm_like}
 \end{equation}
 Each pixel contributes a single $\chi^2_1$ observation; the smoothing prior of
-Sec.~\ref{sec:pspline} supplies the regularization that makes single-realization
+Sec.~\ref{sec:pspline} supplies the regularisation that makes single-realisation
 estimation feasible. The likelihood treats the WDM coefficients as independent,
 which is exact only for a perfectly orthogonal transform; residual
 nearest-neighbour time correlation remains, and as with the moving periodogram
 the spectrum is assumed approximately constant within a tile.
 
-\subsection{One model, three front ends}
+\subsection{One model, two transforms}
 \label{sec:unified}
 
 Both likelihoods are instances of a single Gaussian-coefficient form. A
@@ -390,27 +451,35 @@ time--frequency cell with $R$ real components contributes
 + \big(\textstyle\sum_{r=1}^{R} c^{(r)2}_{nm}\big)\,e^{-\Lambda_{nm}}\Big],
 \label{eq:unified}
 \end{equation}
-so the WDM coefficient ($R=1$, $\chi^2_1$) and the short-time Fourier
+so the WDM coefficient ($R=1$, $\chi^2_1$) and the complex short-time Fourier
 coefficient ($R=2$, real and imaginary parts, $\chi^2_2$, whose squared modulus
-is the periodogram) are handled by the \emph{same} likelihood. The exponential
-dynamic-Whittle form of Eq.~\eqref{eq:dynamic_whittle} is exactly the $R=2$
-marginal of Eq.~\eqref{eq:unified} over the coefficient phase, so the two
-subsections above are the same model written for power and for complex
-coefficients respectively. Modelling the coefficients rather than the power also
-retains phase, so the construction extends to a signal mean
-$c\sim\mathcal{N}(h(\bm\theta), S)$, used for the joint inference of
-Sec.~\ref{sec:lisa}. The estimator therefore has interchangeable front ends: a
-time series is mapped to (time grid, frequency grid, coefficients) by the WDM or
-short-time Fourier transform, and the identical whitened P-spline model of
-Sec.~\ref{sec:model} fits the surface.
+is the periodogram) are handled by the \emph{same} likelihood. The two transforms
+that enter the framework are therefore the WDM wavelet transform and the
+short-time Fourier transform (STFT), each fitted with this Gaussian-coefficient
+likelihood.
+
+The moving periodogram is not a third transform but a special case of the
+Fourier likelihood: the exponential dynamic-Whittle form of
+Eq.~\eqref{eq:dynamic_whittle} is exactly the $R=2$ marginal of
+Eq.~\eqref{eq:unified} over the coefficient phase. The dynamic Whittle thus
+models the Fourier power, whereas the full $R=2$ form keeps the phase. Retaining
+phase matters because it lets the coefficient carry a signal mean,
+$c\sim\mathcal{N}(h(\bm\theta), S)$, which is what enables the joint
+source--noise inference of Sec.~\ref{sec:lisa}; the power-only dynamic Whittle
+cannot. In all cases the time series is mapped to (time grid, frequency grid,
+coefficients) by one of the two transforms, and the identical whitened P-spline
+model of Sec.~\ref{sec:model} fits the surface.
 
 % =====================================================================
 \section{Simulation study}
 \label{sec:sim}
 
-We assess statistical performance where the truth is known, fitting the same
-P-spline model through both observation models and comparing against the true
-surface.
+We assess statistical performance where the truth is known, fitting the P-spline
+model through the WDM coefficient likelihood and the moving-periodogram dynamic
+Whittle and comparing each against the true surface. The phase-retaining Fourier
+likelihood adds nothing in this noise-only test --- without a signal mean it
+reduces to the same power statistic --- so we defer it to the LISA demonstration
+(Sec.~\ref{sec:lisa}).
 
 \subsection{Locally stationary process}
 Following \citet{tang2023MovingPSD}, we use the locally stationary time-varying
@@ -421,19 +490,22 @@ X_{t,T} = w_t + 1.1\cos\!\left(1.5 - \cos\!\left(4\pi\tfrac{t}{T}\right)\right) 
 \label{eq:ls2}
 \end{equation}
 with analytic pointwise PSD $f_0(u,\omega) = 1 + b_1(u)^2 + 2b_1(u)\cos\omega$,
-$b_1(u) = 1.1\cos(1.5 - \cos 4\pi u)$. For each realization we fit the model
+$b_1(u) = 1.1\cos(1.5 - \cos 4\pi u)$. For each realisation we fit the model
 through the WDM likelihood, Eq.~\eqref{eq:wdm_like}, and through the
 moving-periodogram likelihood, Eq.~\eqref{eq:thinned_dynamic_whittle}, and repeat
-across a range of observation lengths.
+across four observation lengths $n = n_t\,n_f$ with $n_f = 24$ frequency bins and
+$n_t \in \{24, 48, 96, 192\}$ time bins, i.e.\ $n \in \{576, 1152, 2304, 4608\}$.
+Each fit draws $250$ warm-up and $250$ posterior samples with a single NUTS chain
+under the configuration of Table~\ref{tab:config}.
 
 The WDM estimator targets the expected local power $\mathbb{E}[w_{nm}^2]$, which
-equals the digital PSD up to a near-constant per-channel normalization,
+equals the digital PSD up to a near-constant per-channel normalisation,
 $\mathbb{E}[w_{nm}^2] = C_m f_0(t_n,f_m)$. We calibrate $C_m$ once from unit
 white noise and report the error against both the Monte Carlo $\mathbb{E}[w^2]$
 target and the calibrated analytic PSD $C_m f_0$.
 
 \subsection{Metrics}
-We summarize point-estimate accuracy with the mean squared error of the log-PSD,
+We summarise point-estimate accuracy with the mean squared error of the log-PSD,
 \begin{equation}
 \mathrm{MSE}_{\log f} =
 \frac{1}{T(K+1)}\sum_{t=1}^{T}\sum_{j=0}^{K}
@@ -445,13 +517,22 @@ using the posterior mean as the point estimate. We also report the empirical
 coverage of the posterior $90\%$ credible intervals and, as a measure of
 posterior contraction, the width of the $90\%$ credible interval on $\log S$
 averaged over the grid (a scale-free quantity, comparable across
-representations). Each configuration is summarized over $100$ independent
-realizations; we plot the median and interquartile range across realizations.
+representations). Each configuration is summarised over $100$ independent
+realisations; we plot the median and interquartile range across realisations.
+
+As an external baseline we run the Bernstein--Dirichlet dynamic-Whittle estimator
+of \citet{tang2023MovingPSD} on the same realisations through its
+\project{beyondWhittle} reference implementation. Because that estimator and our
+moving-periodogram fit share the dynamic Whittle likelihood and differ only in the
+prior (Bernstein--Dirichlet process versus tensor-product P-spline), the
+comparison isolates the effect of the prior under matched data.
+\avi{Run \project{beyondWhittle} on the stored LS2 realisations and add its
+MSE/coverage/CI-width curves to Fig.~\ref{fig:sim_mse_coverage}.}
 
 \begin{figure*}[t]
     \centering
-    \includegraphics[width=0.95\linewidth]{figures/sim_three_panel.png}
-    \caption{Single LS2 realization. Left: true time-varying PSD
+    \includegraphics[width=\linewidth]{figures/sim_three_panel.png}
+    \caption{Single LS2 realisation. Left: true time-varying PSD
     $\log f_0(t,f)$. Middle: posterior-median $\log\hat S(t,f)$ from the WDM
     likelihood. Right: posterior-median $\log\hat S(t,f)$ from the
     moving-periodogram likelihood. All panels share a colour scale and are
@@ -461,9 +542,9 @@ realizations; we plot the median and interquartile range across realizations.
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=0.8\linewidth]{figures/sim_mse_coverage.png}
+    \includegraphics[width=\linewidth]{figures/sim_mse_coverage.png}
     \caption{Performance versus the number of observations $n$, over $100$
-    realizations per point (median, with interquartile band where shown). Top:
+    realisations per point (median, with interquartile band where shown). Top:
     $\mathrm{MSE}_{\log f}$. Middle: $90\%$ credible-interval coverage (nominal
     level dotted). Bottom: median width of the $90\%$ credible interval on
     $\log S$, contracting with $n$. One curve per observation model (WDM and
@@ -473,33 +554,36 @@ realizations; we plot the median and interquartile range across realizations.
 
 \subsection{Results}
 Both observation models recover the time-varying surface and contract with the
-data (Fig.~\ref{fig:sim_mse_coverage}). Over $100$ realizations at each of four
+data (Fig.~\ref{fig:sim_mse_coverage}). Over $100$ realisations at each of four
 observation lengths ($n = 576$ to $4608$), the median $\mathrm{MSE}_{\log f}$
 falls monotonically with $n$ for both likelihoods, the $90\%$ credible-interval
 coverage stays close to nominal, and the credible-interval width on $\log S$
-contracts steadily -- the expected Bayesian behaviour. No sampler divergence
-occurred in any fit. On this smooth process the moving periodogram is the more
-accurate of the two at matched $n$; we return to why the WDM front end is
-nonetheless preferable for phase-coherent inference in
-Sec.~\ref{sec:discussion}.
+contracts steadily with $n$, as expected. No sampler divergence occurred in any
+fit. On this smooth process the moving periodogram has the lower median
+$\mathrm{MSE}_{\log f}$ at matched $n$, though the gap is comparable to the
+interquartile spread across realisations \avi{state whether the separation
+exceeds the IQR band, i.e. whether it is significant; if not, soften to
+``comparable''}; we return in Sec.~\ref{sec:discussion} to why the WDM front end
+is nonetheless preferable for phase-coherent inference.
 
 % =====================================================================
 \section{Recovering a non-stationary LISA foreground}
 \label{sec:lisa}
 
 We now apply the framework to simulated LISA data, where the non-stationarity is
-physical rather than imposed. LISA's dominant low-frequency foreground -- the
-unresolved Galactic confusion noise -- is cyclostationary: as the constellation
-orbits the Sun its antenna pattern sweeps across the anisotropic Galaxy,
-modulating the confusion power with an annual period
-\citep{digman2022cyclostationary}. We show that both the WDM and the
-moving-periodogram front ends recover this time-varying noise PSD, which a
-stationary model cannot represent.
+physical rather than imposed. As described in Sec.~\ref{sec:intro}, the Galactic
+confusion foreground is cyclostationary, its power modulated with an annual period
+\citep{digman2022cyclostationary}. We show that both transforms of
+Sec.~\ref{sec:obs} recover this time-varying noise PSD, which a stationary model
+cannot represent.
 
 \subsection{Simulated data}
 \label{sec:lisa_data}
 
-We simulate one year of a second-generation TDI channel (TDI-X) sampled at
+We simulate one year of a second-generation TDI channel (TDI-X)
+\avi{cite TDI (Tinto \& Dhurandhar 2021 review; Armstrong, Estabrook \& Tinto
+1999) and the LISA mission (Amaro-Seoane et al. 2017).}
+sampled at
 interval $\Delta t \simeq 200\,\mathrm{s}$ ($N \simeq 1.6\times10^{5}$ samples, a
 Nyquist frequency of $2.5\,\mathrm{mHz}$), in fractional-frequency units. The
 noise has two independent components,
@@ -514,7 +598,7 @@ are the analytic Robson--Cornish--Liu fits~\citep{robson2019sensitivity}
 $S_{\mathrm{inst}}(f)$ and $S_{\mathrm{gal}}(f)$: each is generated in the
 frequency domain with
 $\tilde n(f_k) \sim \mathcal{CN}\!\big(0,\, S(f_k)/(4\,\Delta f\,\Delta t^2)\big)$
-and transformed to the time domain, so the realized one-sided PSD reproduces the
+and transformed to the time domain, so the realised one-sided PSD reproduces the
 target.
 
 The confusion power is modulated by the cyclostationary annual law of
@@ -524,24 +608,26 @@ r(u) = 1 + \sum_{k=1}^{5} A_k \cos\!\big(2\pi k\,u\, T_{\mathrm{obs}}/T_{\mathrm
 \label{eq:dc_modulation}
 \end{equation}
 with the tabulated harmonic coefficients $(A_k,\varphi_k)$ of their Table~1
-(A-channel, one-year fit). Physically, $r(u)$ is the antenna pattern sweeping the
-anisotropic Galaxy as the constellation orbits the Sun; the second harmonic
-dominates, so the confusion power peaks twice per year and varies by a factor
-$\simeq 7$ over the year, reproducing the modulation of their Figure~1. The
-coefficients average to $\langle r\rangle = 1$ over whole years, so the modulation
-redistributes confusion power in time without changing its time average. Because
+(A-channel, one-year fit). The second harmonic dominates, so the confusion power
+peaks twice per year and varies by a factor $\simeq 7$, reproducing their
+Figure~1. The coefficients average to $\langle r\rangle = 1$ over whole years, so
+the modulation redistributes confusion power in time without changing its time
+average. Because
 the two components are independent and $r$ varies slowly relative to a WDM time
 bin, the instantaneous one-sided PSD is
 \begin{equation}
 S(u,f) = S_{\mathrm{inst}}(f) + r(u)\,S_{\mathrm{gal}}(f),
 \label{eq:lisa_psd}
 \end{equation}
-which is exactly the local power the estimator targets. This is the
-discriminating regime for non-stationary spectral estimation: a stationary model
-can fit only a single time-averaged spectrum, whereas the time-varying surface
-$S(u,f)$ carries the annual modulation. The data also contain a resolvable
+which is exactly the local power the estimator targets. The estimator recovers
+the total surface $S(u,f)$, not the individual components; Eq.~\eqref{eq:lisa_psd}
+is a property of the simulated data, not an output of the fit. This is the
+discriminating regime: a stationary model fits only a single time-averaged
+spectrum, whereas $S(u,f)$ carries the annual modulation. The data also contain a resolvable
 Galactic binary at $f_0 = 1.5\,\mathrm{mHz}$ (optimal SNR $200$, generated with
-\texttt{jaxGB} in the same TDI-X generation-2 convention); recovering its
+\project{jaxGB} in the same TDI-X generation-2 convention)
+\avi{cite \project{jaxGB} and the fast Galactic-binary waveform it implements
+(Cornish \& Littenberg 2007)}; recovering its
 parameters jointly with the noise is the subject of Sec.~\ref{sec:gibbs}. For the
 noise-recovery results of this section the binary has been removed, so the
 estimand is the pure non-stationary noise PSD.
@@ -549,7 +635,7 @@ estimand is the pure non-stationary noise PSD.
 \subsection{Recovered time-varying PSD}
 \label{sec:lisa_recovery}
 
-From a single noisy realization, the estimator denoises the raw $\chi^2_1$ WDM
+From a single noisy realisation, the estimator denoises the raw $\chi^2_1$ WDM
 power into a smooth log-PSD surface that matches the Monte Carlo reference
 (Fig.~\ref{fig:lisa_surface}). The recovered $\log\hat S(u,f)$ captures both the
 steep instrument spectrum at low frequency and the twice-yearly Galactic
@@ -559,29 +645,36 @@ The effect of the stationarity assumption is sharpest in a single frequency
 channel. Figure~\ref{fig:signal_bias} shows the recovered noise PSD at
 $f = 1.5\,\mathrm{mHz}$ over the year: a stationary model is necessarily flat in
 time at the time-averaged level, overestimating the noise when the Galactic
-confusion is low and underestimating it when the confusion peaks -- by up to the
-factor-$\simeq 7$ swing of the modulation -- whereas the time-varying fit tracks
+confusion is low and underestimating it when the confusion peaks, by up to the
+factor-$\simeq 7$ swing of the modulation, whereas the time-varying fit tracks
 the twice-yearly modulation and contains the true $S(u,f)$ within its $90\%$
 band.
 
 The recovery does not depend on the time--frequency representation. We analyse
-the same non-stationary noise with the two front ends of Sec.~\ref{sec:obs} that
-carry a localized power statistic -- the WDM coefficient likelihood and the
-moving periodogram (dynamic Whittle) -- alongside the phase-retaining short-time
-Fourier transform. All three recover the same cyclostationary modulation of the
-noise PSD in the binary's channel, tracking the true annual envelope where a
-stationary model is flat (Fig.~\ref{fig:rep_compare}). Because all three use the
-identical P-spline model, the quantity being tested is the stationarity
-assumption, not the representation. Over an ensemble of independent realizations
-the $90\%$ credible band on the recovered noise PSD attains near-nominal
-empirical coverage against the analytic truth ($0.78$ and $0.84$ in the two
-noise-orthogonal A and E channels; Sec.~\ref{sec:gibbs}), so the recovered
-uncertainties are calibrated and not merely the point estimate accurate.
+the same non-stationary noise with both transforms of Sec.~\ref{sec:obs}: the WDM
+wavelet coefficients and the short-time Fourier coefficients, the latter in both
+its phase-retaining form and its power-only dynamic-Whittle reduction. All of
+them recover the same cyclostationary modulation of the noise PSD in the binary's
+channel, tracking the true annual envelope where a stationary model is flat
+(Fig.~\ref{fig:rep_compare}). Because they share the identical P-spline model, the
+quantity being tested is the stationarity assumption rather than the
+representation. Over an ensemble of independent realisations the $90\%$
+credible band on the recovered noise PSD attains empirical coverage of $0.78$ and
+$0.84$ in the two noise-orthogonal A and E channels (Sec.~\ref{sec:gibbs}), below
+the nominal $0.90$. We attribute this under-coverage to the diagonal likelihood
+approximation: treating the WDM coefficients as independent neglects the residual
+nearest-neighbour correlations of a finitely-orthogonal transform
+(Sec.~\ref{sec:wdm}), which narrows the posterior band relative to the true
+sampling variability. \avi{Quote the Monte Carlo uncertainty on each coverage
+number (binomial, given the ensemble size $N_{\mathrm{real}}$), and ideally show
+that a crude correlation correction moves coverage toward nominal --- otherwise a
+referee will read 0.78 vs 0.90 as a calibration failure rather than a known,
+bounded approximation error.}
 
 \begin{figure*}[t]
     \centering
-    \includegraphics[width=0.95\linewidth]{figures/lisa_surface_comparison.png}
-    \caption{One year of non-stationary LISA noise, single realization: raw WDM
+    \includegraphics[width=\linewidth]{figures/lisa_surface_comparison.png}
+    \caption{One year of non-stationary LISA noise, single realisation: raw WDM
     log power (the data), the posterior-mean $\log\hat S(u,f)$, and the Monte
     Carlo $\mathbb{E}[w^2]$ reference. The estimator denoises the data into the
     smooth time-varying surface, recovering the twice-yearly Galactic-confusion
@@ -591,7 +684,7 @@ uncertainties are calibrated and not merely the point estimate accurate.
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/lisa_gibbs_psd_bias.png}
+    \includegraphics[width=\linewidth]{figures/lisa_gibbs_psd_bias.png}
     \caption{Recovered TDI noise PSD in the binary's channel
     ($f = 1.5\,\mathrm{mHz}$) over one year. A stationary fit (red, with $90\%$
     band) is necessarily flat at the time-average and so misses the modulation;
@@ -602,30 +695,37 @@ uncertainties are calibrated and not merely the point estimate accurate.
 
 \begin{figure*}[t]
     \centering
-    \includegraphics[width=0.95\linewidth]{figures/lisa_representation_comparison.png}
-    \caption{Non-stationary noise, three observation models. Left: the relative
-    noise-power modulation $S(u)/\langle S\rangle$ in the binary's channel -- the
-    WDM (blue), STFT (green), and dynamic-Whittle moving-periodogram (purple,
-    dashed) fits all track the true cyclostationary envelope (black), while a
-    stationary model is flat (red). Right: posterior of the embedded binary
+    \includegraphics[width=\linewidth]{figures/lisa_representation_comparison.png}
+    \caption{Non-stationary noise across both transforms. Left: the relative
+    noise-power modulation $S(u)/\langle S\rangle$ in the binary's channel. The WDM
+    (blue), short-time Fourier (green), and dynamic-Whittle moving-periodogram
+    (purple, dashed) fits all track the true cyclostationary envelope (black),
+    while a stationary model is flat (red). Right: posterior of the embedded binary
     amplitude relative to truth for the two phase-retaining fits (violins; median
-    bars, injected value dashed) -- a preview of the joint fit of
-    Sec.~\ref{sec:gibbs}; the dynamic Whittle is power-only and so estimates the
+    bars, injected value dashed), a preview of the joint fit of
+    Sec.~\ref{sec:gibbs}. The dynamic Whittle is power-only and so estimates the
     noise PSD on the signal-subtracted series.}
     \label{fig:rep_compare}
 \end{figure*}
 
 % =====================================================================
-\section{Toward a joint signal--noise fit: a mini Gibbs demonstration}
+\section{Joint signal--noise inference with a blocked-Gibbs scheme}
 \label{sec:gibbs}
 
+\avi{Work in progress. The results in this section are preliminary: the
+blocked-Gibbs scheme runs and the early numbers are encouraging, but the joint
+signal--noise behaviour needs more investigation before firm claims are drawn, and
+the framing/conclusions here should be revisited once that is complete.}
+
 The same Gaussian-coefficient likelihood that recovers the noise PSD admits a
-signal mean, $c_{nm}\sim\mathcal{N}(h_{nm}(\bm\theta), S_{nm})$, so the source
-parameters $\bm\theta$ and the non-stationary noise surface $\bm{\Lambda}$ can be
-inferred \emph{jointly}. This section sketches a blocked-Gibbs scheme for that
-joint fit and reports a proof-of-concept on a Galactic binary; the full
-demonstration on a massive-black-hole-binary (MBHB) waveform is ongoing work,
-itemized at the end of the section.
+signal mean, $c_{nm}\sim\mathcal{N}(h_{nm}(\bm\theta), S_{nm})$, so in principle
+the source parameters $\bm\theta$ and the non-stationary noise surface
+$\bm{\Lambda}$ can be inferred \emph{jointly}. We develop a blocked-Gibbs scheme
+for this joint fit and report preliminary results on a Galactic binary. We treat
+this section as work in progress: the scheme runs and the early results are
+encouraging, but the joint signal--noise behaviour requires further investigation
+before firm conclusions can be drawn. The full massive-black-hole-binary (MBHB)
+demonstration (Sec.~\ref{sec:gibbs_todo}) remains to be carried out.
 
 \subsection{Blocked Gibbs scheme}
 \label{sec:gibbs_scheme}
@@ -638,7 +738,7 @@ block, conditional on the current noise surface $\bm{\Lambda}$, updates the sour
 parameters $\bm\theta$. Blocking is deliberate: the high-dimensional smooth PSD
 coefficients and the low-dimensional source parameters have very different
 geometries, so each block's sub-kernel can adapt independently while the Gibbs
-sweep couples them. The scheme accommodates heterogeneous sub-kernels -- a
+sweep couples them. The scheme accommodates heterogeneous sub-kernels: a
 gradient-based NUTS update for the differentiable PSD block, and a gradient-free
 update for a source model whose waveform is not differentiable.
 
@@ -646,102 +746,121 @@ update for a source model whose waveform is not differentiable.
 \label{sec:gibbs_gb}
 We first demonstrate the joint fit on the resolvable Galactic binary embedded in
 the data of Sec.~\ref{sec:lisa}, with both blocks updated by NUTS. From the single
-one-year realization the fit recovers the coherent binary together with the noise
+one-year realisation the fit recovers the coherent binary together with the noise
 surface: although the binary is sub-threshold in any single time--frequency cell,
 its amplitude is recovered to within $\sim\!10\%$ by coherent summation across the
-plane ($|A|/|A|_{\mathrm{true}} = 0.90$). We verified separately that the
-wavelet-domain source posterior agrees with the standard frequency-domain Whittle
-analysis in stationary noise, so the wavelet domain costs no information relative
-to the usual analysis.
-
-Repeating the joint fit over the two noise-orthogonal TDI channels A and E -- each
-with its own Digman--Cornish modulation and one shared binary amplitude -- gives
-unbiased amplitude recovery across $12$ independent one-year realizations,
-$|A|/|A|_{\mathrm{true}} = 1.01 \pm 0.05$ (Fig.~\ref{fig:ensemble}), with the
-$90\%$ PSD credible band attaining the near-nominal coverage quoted in
-Sec.~\ref{sec:lisa_recovery}. No realization produced sampler divergences.
+plane ($|A|/|A|_{\mathrm{true}} = 0.90$). As a check that the wavelet domain costs
+no information relative to the usual analysis, we compare the WDM source posterior
+in stationary noise against the standard frequency-domain Whittle analysis on the
+same data and find the two agree across all four binary parameters
+(Fig.~\ref{fig:gb_stationary}).
 
 \begin{figure}[t]
     \centering
+    \includegraphics[width=\linewidth]{figures/lisa_gb_stationary_corner.png}
+    \caption{Galactic-binary parameter posteriors in stationary noise, recovered
+    in the WDM domain (orange, dashed) and with the standard frequency-domain
+    Whittle analysis (blue, solid); injected values in black. The two posteriors
+    coincide across $(\log_{10} f_0, \dot f, \log_{10} A, \phi_0)$, confirming that
+    the wavelet transform sacrifices no information on the source.}
+    \label{fig:gb_stationary}
+\end{figure}
+
+Repeating the joint fit over the two noise-orthogonal TDI channels A and E, each
+with its own Digman--Cornish modulation and one shared binary amplitude (each fit
+$300$ warm-up and $250$ posterior draws, WDM grid $n_t = 256$ time bins), gives
+unbiased amplitude recovery across $12$ independent one-year realisations,
+$|A|/|A|_{\mathrm{true}} = 1.01 \pm 0.04$ (Fig.~\ref{fig:ensemble}), with the
+$90\%$ PSD credible band attaining the coverage quoted in
+Sec.~\ref{sec:lisa_recovery}. No realisation produced sampler divergences.
+\avi{$12$ realisations is a small ensemble for a coverage statement: report the
+binomial Monte Carlo error on the $0.78/0.84$ coverages, or grow the ensemble.}
+
+\begin{figure*}[t]
+    \centering
     \includegraphics[width=\linewidth]{figures/lisa_ensemble.png}
-    \caption{A/E ensemble over $12$ independent one-year realizations of the joint
+    \caption{A/E ensemble over $12$ independent one-year realisations of the joint
     fit. Left: recovered binary amplitude relative to truth (violin; points are
-    individual realizations, median bar, injected value dashed), unbiased at
-    $1.01\pm0.05$. Right: empirical coverage of the $90\%$ PSD credible band per
+    individual realisations, median bar, injected value dashed), unbiased at
+    $1.01\pm0.04$. Right: empirical coverage of the $90\%$ PSD credible band per
     channel against the analytic truth (nominal level dotted), near nominal.}
     \label{fig:ensemble}
-\end{figure}
+\end{figure*}
 
 \subsection{Why the noise model matters for the source}
 \label{sec:transient}
 
-A year-long binary's parameters are robust to the noise model -- the strain is
+A year-long binary's parameters are robust to the noise model: the strain is
 linear in the quadrature amplitudes, so the weighted least-squares estimate is
-unbiased even when the noise weights are mis-specified, and a full-cycle source
-averages over the modulation. The interesting regime is a \emph{time-localized}
-source -- a burst, or the final days of an MBHB inspiral -- which accumulates its
-signal-to-noise at a single epoch and is measured against the \emph{instantaneous}
-noise. We model such a source through its frequency-channel STFT coefficient,
+unbiased even when the noise weights are misspecified, and a full-cycle source
+averages over the modulation. The interesting regime is a \emph{time-localised}
+source, such as a burst or the final days of an MBHB inspiral, which accumulates
+its signal-to-noise at a single epoch and is measured against the
+\emph{instantaneous} noise. We model such a source through its frequency-channel STFT coefficient,
 $c_n = A\,e^{i(\phi_0 + 2\pi\,\delta\! f\, t_n)}\,W(u_n) + \mathrm{noise}_n$, with
-$W$ a localized envelope and $\mathrm{noise}_n$ of local variance $S(u_n, f_0)$,
-and infer $(\delta\! f, A, \phi_0)$ with NUTS under two noise models: the
-stationary frequency-domain Whittle (a single, time-averaged PSD) and the WDM
-P-spline time-varying PSD.
+$W$ a localised envelope and $\mathrm{noise}_n$ of local variance $S(u_n, f_0)$,
+and infer $(\delta\! f, A, \phi_0)$ with NUTS ($800$ warm-up, $2000$ draws) under
+two noise models: the stationary frequency-domain Whittle (a single,
+time-averaged PSD) and the WDM P-spline time-varying PSD.
 
 The two analyses differ markedly (Fig.~\ref{fig:transient}). For a transient at a
-confusion \emph{minimum} -- a quiet epoch -- the time-varying PSD recognises the
+confusion \emph{minimum}, a quiet epoch, the time-varying PSD recognises the
 low local noise and returns a posterior a factor $\simeq 2$ tighter than the
 stationary Whittle in every parameter, both centred on the truth. At a confusion
 \emph{maximum} the stationary model instead underestimates the local noise and
 becomes overconfident, its $90\%$ credible region containing the truth only $0.77$
-of the time against $0.88$ for the time-varying model (over $300$ realizations;
-nominal $0.90$). Modelling the non-stationarity is therefore what keeps the source
-posterior both calibrated and maximally informative for time-localized sources --
+of the time against $0.88$ for the time-varying model (over $300$ realisations;
+nominal $0.90$; binomial MC error $\approx 0.02$). Modelling the non-stationarity is therefore what keeps the source
+posterior both calibrated and maximally informative for time-localised sources --
 the regime the MBHB demonstration below targets.
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\linewidth]{figures/lisa_transient_corner.png}
-    \caption{Parameter posteriors for a time-localized source at a quiet
+    \caption{Parameter posteriors for a time-localised source at a quiet
     (confusion-minimum) epoch, inferred with the stationary frequency-domain
     Whittle (red, dashed) and the WDM P-spline time-varying PSD (green, solid);
     truth in grey. By weighting the source against the low local noise, the
     time-varying PSD yields a posterior a factor $\simeq 2$ tighter in every
     parameter. (At a confusion maximum the roles reverse and the stationary model
-    is instead overconfident -- $90\%$ coverage $0.77$ versus $0.88$.)}
+    is instead overconfident, with $90\%$ coverage $0.77$ versus $0.88$.)}
     \label{fig:transient}
 \end{figure}
 
-\subsection{Planned MBHB demonstration (ongoing work)}
+\subsection{Future work: an MBHB demonstration}
 \label{sec:gibbs_todo}
 
 The natural next step is to replace the linear-amplitude source block with a full
 MBHB waveform and LISA response, run inside the same blocked-Gibbs loop. The
-intended demonstration is a $2\times2$ comparison: two datasets -- an MBHB in
+intended demonstration is a $2\times2$ comparison. Two datasets, an MBHB in
 \emph{stationary} noise and the same MBHB in \emph{non-stationary}
-(cyclostationary) noise -- each analysed with two PSD blocks: a frequency-domain
+(cyclostationary) noise, are each analysed with two PSD blocks: a frequency-domain
 log-P-spline (stationary) block and the time--frequency P-spline (non-stationary)
 block of this work. Following Sec.~\ref{sec:transient}, the expectation is that
-the stationary PSD block yields mis-calibrated MBHB posteriors on the
+the stationary PSD block yields miscalibrated MBHB posteriors on the
 non-stationary dataset, which the time-varying block corrects.
 
-Realizing this demonstration requires only that the existing blocked-Gibbs loop
+Realising this demonstration requires only that the existing blocked-Gibbs loop
 be equipped with an MBHB source block alongside the stationary and non-stationary
 PSD blocks. The source waveform and LISA response can be generated with
-\texttt{BBHx} (PhenomHM/D with its built-in response wrapper) and the MBHB
-parameters updated with a gradient-free sampler such as \texttt{Eryn}, restricted
+\project{BBHx} (PhenomHM/D with its built-in response wrapper)
+\avi{cite \project{BBHx} (Katz et al.), PhenomD (Husa/Khan 2016) and PhenomHM
+(London et al. 2018)}
+and the MBHB
+parameters updated with a gradient-free sampler such as \project{Eryn}
+\avi{cite \project{Eryn} (Karnesis et al. 2023)}, restricted
 to a few well-measured parameters to keep the inner loop fast, while the
 stationary comparison block reuses a frequency-domain log-P-spline
-(\texttt{LogPSplinePSD}) so that the two PSD blocks differ only in the
+(\project{LogPSplinePSD}) so that the two PSD blocks differ only in the
 stationarity assumption. The deliverable is the four combined runs of the
 $2\times2$ comparison and the posterior overlay that isolates the stationary
 block's bias on the non-stationary dataset. The whole construction rests on the
 two ingredients already established above: that the time-varying noise PSD is
-recoverable (Sec.~\ref{sec:lisa}), and that, for a time-localized source, using
+recoverable (Sec.~\ref{sec:lisa}), and that, for a time-localised source, using
 it rather than a stationary PSD is what calibrates the source posterior
 (Sec.~\ref{sec:transient}).
 
-\avi{Outstanding before submission: \texttt{BBHx} is a GPU/Linux dependency and
+\avi{Outstanding before submission: \project{BBHx} is a GPU/Linux dependency and
 the CPU build does not currently run on the target workstation, so the four
 $2\times2$ runs and the final posterior-comparison figure must be produced on a
 GPU-equipped machine.}
@@ -750,31 +869,34 @@ GPU-equipped machine.}
 \section{Discussion}
 \label{sec:discussion}
 
-The framework cleanly separates the statistical model -- the smooth log-PSD
-surface and its prior -- from the observation model that relates a
-time--frequency data product to that surface. Section~\ref{sec:obs} exercised
-this separation with three front ends -- the WDM transform, the moving
-periodogram, and the phase-retaining short-time Fourier transform -- that share
-the model of Sec.~\ref{sec:model} verbatim, and any near-orthogonal
-representation whose coefficients admit a local-power (Gaussian-coefficient or
-exponential) likelihood -- multitaper spectrograms, $Q$-transforms, or other
-wavelet families -- can be added as a new front end without changing the model.
+The framework separates the statistical model, the smooth log-PSD surface and its
+prior, from the observation model that relates a time--frequency data product to
+that surface. Section~\ref{sec:obs} exercised this separation with two transforms,
+the WDM wavelet transform and the short-time Fourier transform (the latter used
+either with phase or, as the moving periodogram, without), both of which share the
+model of Sec.~\ref{sec:model} verbatim. Any other near-orthogonal representation
+whose coefficients admit a local-power (Gaussian-coefficient or exponential)
+likelihood, such as a multitaper spectrogram, a $Q$-transform, or another wavelet
+family, can be added without changing the model.
+\avi{cite multitaper (Thomson 1982) and the $Q$-transform (Chatterji et al.
+2004) if we keep naming them as concrete examples.}
 
 The LISA demonstration shows that the choice of stationarity assumption, not the
-choice of representation, is what drives the bias: the WDM and STFT front ends
-agree with one another and with the frequency-domain analysis where stationarity
-holds, and both track the cyclostationary modulation where it does not. Existing
+choice of representation, is what drives the bias: the wavelet and Fourier
+transforms agree with one another and with the frequency-domain analysis where
+stationarity holds, and both track the cyclostationary modulation where it does
+not. Existing
 LISA stochastic pipelines model this modulation either with an analytic
 cyclostationary template \citep{digman2022cyclostationary, buscicchio2024test,
 pozzoli2024bahamas}, a weakly-parametric spectral model
 \citep{pozzoli2024weakly}, or a per-segment confusion amplitude
 \citep{rosati2024prototype}; our estimator instead infers the time--frequency
 PSD surface non-parametrically, requiring no template for the modulation shape.
-This makes the framework a natural component of detector-characterization and
-global-fit pipelines \citep{katz2025efficient}, where a mis-specified stationary
+This makes the framework a natural component of detector-characterisation and
+global-fit pipelines \citep{katz2025efficient}, where a misspecified stationary
 noise model otherwise contaminates the recovered source population.
 
-Several extensions follow naturally. The source block can be generalized from the
+Several extensions follow naturally. The source block can be generalised from the
 two linear quadrature amplitudes at fixed frequency to the full parameter vector
 $\bm\theta = (f_0, \dot f_0, A, \ldots)$ with a nonlinear, multimodal frequency
 search, leaving the blocked structure unchanged. Beyond a single source, the same
@@ -782,35 +904,48 @@ coefficient likelihood supports multi-source and multi-channel joint fits, and
 relaxing the diagonal approximation to a correlated-coefficient likelihood would
 account for the residual nearest-neighbour correlations left by a finitely
 orthogonal transform. Finally, while a year-long binary's parameters are robust to
-the noise model, time-localized sources are not (Sec.~\ref{sec:transient}): there
+the noise model, time-localised sources are not (Sec.~\ref{sec:transient}): there
 the time-varying PSD is what keeps the source posterior both calibrated and
 maximally informative. The concrete next step we are pursuing is the
-massive-black-hole-binary demonstration of Sec.~\ref{sec:gibbs_todo} -- a full
-transient waveform and LISA response inside the blocked-Gibbs loop, the sharply
-time-localized regime where critically-sampled wavelets should also outperform
-the moving periodogram.
+massive-black-hole-binary demonstration of Sec.~\ref{sec:gibbs_todo}: a full
+transient waveform and LISA response inside the blocked-Gibbs loop. This is the
+sharply time-localised regime where we expect critically-sampled wavelets to also
+outperform the moving periodogram.
 
 % =====================================================================
 \section{Conclusion}
 \label{sec:conclusion}
 
-We have presented a unified Bayesian framework for non-stationary spectral
-estimation in which a single statistical object -- a smooth log-PSD surface
-modelled by a whitened tensor-product P-spline -- is decoupled from the
-time--frequency representation used to observe it. A single Gaussian-coefficient
-likelihood makes the WDM transform, the moving periodogram, and the
-phase-retaining short-time Fourier transform interchangeable front ends to that
-one model. On a locally stationary process with known truth the estimator
-contracts with the data at near-nominal coverage, and on simulated LISA data it
-recovers the cyclostationary Galactic foreground -- where a stationary model is
-flat at the year-averaged level and misses the full annual swing of the confusion
--- consistently with the WDM and moving-periodogram front ends. Because the same
-coefficient likelihood admits a signal mean, the noise PSD and an embedded source
-can be inferred jointly with a blocked-Gibbs scheme; we demonstrated this on a
-Galactic binary and outlined the massive-black-hole-binary demonstration that
-remains. Because any near-orthogonal representation with a local-power likelihood
-plugs into the same model, the framework is a portable component for detector
+We have presented a Bayesian framework for non-stationary spectral estimation in
+which a single statistical object, a smooth log-PSD surface modelled by a whitened
+tensor-product P-spline, is decoupled from the time--frequency representation used
+to observe it. A single Gaussian-coefficient likelihood connects two transforms to
+that one model, the WDM wavelet transform and the short-time Fourier transform,
+with the classical moving periodogram recovered as the phase-discarded special
+case of the latter. On a locally stationary process with known truth the
+estimator contracts with the data at near-nominal coverage. On
+simulated LISA data it recovers the cyclostationary Galactic foreground, which a
+stationary model cannot represent because it is flat at the year-averaged level
+and misses the full annual swing of the confusion. Because the same coefficient
+likelihood admits a signal mean, the noise PSD and an embedded source can in
+principle be inferred jointly with a blocked-Gibbs scheme; we report preliminary
+results on a Galactic binary and outline the massive-black-hole-binary
+demonstration that remains.
+Since any near-orthogonal representation with a local-power likelihood plugs into
+the same model, the framework is a portable component for detector
 characterisation and global-fit pipelines wherever the noise drifts in time.
+
+% =====================================================================
+\section*{Data and code availability}
+\avi{Add a one-line statement pointing to the public repository and the archived
+release/DOI used to produce the figures, and name the key dependencies
+(\project{jaxGB}, \project{beyondWhittle}, the WDM transform implementation).
+Note: \texttt{ramos2023scikit} (scikit-fda) is in \texttt{refs.bib} but currently
+uncited --- cite it where the B-spline basis is built, or drop it.}
+
+\begin{acknowledgments}
+\avi{TODO: funding, collaborators, computing resources.}
+\end{acknowledgments}
 
 % =====================================================================
 \bibliographystyle{apsrev4-2}

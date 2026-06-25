@@ -253,7 +253,7 @@ def render(fig_dir: Path, d) -> None:
     refl = np.log(d["ref_w"] + 1e-30)
     vmin = float(np.percentile(np.concatenate([post.ravel(), refl.ravel()]), 2))
     vmax = float(np.percentile(np.concatenate([post.ravel(), refl.ravel()]), 98))
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.2), constrained_layout=True, sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(7.1, 2.4), constrained_layout=True, sharey=True)
     for ax, fld, ttl in [(axes[0], raw, "Raw WDM power (data)"),
                          (axes[1], post, r"Posterior-mean $\log\hat S(u,f)$"),
                          (axes[2], refl, r"Monte Carlo $\mathbb{E}[w^2]$")]:
@@ -265,7 +265,7 @@ def render(fig_dir: Path, d) -> None:
     save_figure(fig, fig_dir / "lisa_surface_comparison.png")
 
     # --- 2. PSD bias in the GB channel: true / stationary / Gibbs ---
-    fig, ax = plt.subplots(figsize=(7.0, 4.2), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(3.4, 2.4), constrained_layout=True)
     ax.plot(t_w, d["true_psd_w"][:, gb_w], color="black", lw=2.0, label="True noise PSD")
     ax.plot(t_w, d["stat_psd"][:, gb_w], color="tab:red", lw=1.8, label="Stationary fit")
     ax.fill_between(t_w, d["stat_lo"][gb_w], d["stat_hi"][gb_w], color="tab:red", alpha=0.12)
@@ -285,7 +285,7 @@ def render(fig_dir: Path, d) -> None:
         return slice_ / np.mean(slice_)
 
     fig, (ax_m, ax_a) = plt.subplots(
-        1, 2, figsize=(13, 4.4), gridspec_kw={"width_ratios": [2.4, 1]},
+        1, 2, figsize=(7.1, 2.7), gridspec_kw={"width_ratios": [2.4, 1]},
         constrained_layout=True)
 
     ax_m.plot(t_w, _rel(d["true_psd_w"][:, gb_w]), color="black", lw=2.4, label="True modulation")
@@ -295,10 +295,12 @@ def render(fig_dir: Path, d) -> None:
     ax_m.plot(np.asarray(d["dw_tg"]) * yrs, np.asarray(d["dw_rel"]), color="tab:purple",
               lw=1.8, ls="--", label="Dynamic Whittle")
     ax_m.set_xlim(t_w.min(), t_w.max())
+    ax_m.set_ylim(top=ax_m.get_ylim()[1] * 1.30)  # headroom for the legend
     ax_m.set_xlabel("Time [yr]")
     ax_m.set_ylabel(r"Relative noise power $S(u)\,/\,\langle S\rangle$")
     ax_m.set_title(rf"Modulation recovery at $f \approx {fg_w[gb_w]*1e3:.2f}$ mHz")
-    ax_m.legend(loc="upper right", ncol=1)
+    ax_m.legend(loc="upper center", ncol=3, fontsize=8, columnspacing=1.2,
+                handlelength=1.6, borderaxespad=0.3)
 
     # Recovered-amplitude posteriors as violins (vs. the injected value).
     ratio_w = np.asarray(d["ratio_w"]); ratio_s = np.asarray(d["ratio_s"])
