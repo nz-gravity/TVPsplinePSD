@@ -28,6 +28,7 @@ from .splines import (
     create_bspline_roughness_penalty,
     evaluate_bspline_basis,
 )
+from .vi import vi_warmstart
 
 
 def fit_log_pspline_surface(
@@ -43,6 +44,9 @@ def fit_log_pspline_surface(
     max_tree_depth: int = 10,
     target_accept_prob: float = 0.85,
     store_log_psd_samples: bool = True,
+    use_vi: bool = False,
+    vi_steps: int = 2000,
+    vi_lr: float = 1e-2,
 ) -> dict[str, object]:
     """Fit a smooth ``log S(t, f)`` surface to real time-frequency coefficients.
 
@@ -111,6 +115,23 @@ def fit_log_pspline_surface(
         config,
         store_log_psd_samples,
     )
+    vi_losses = None
+    vi_log_psd = None
+    if use_vi:
+        # Refine the PLS init with a diagonal-guide VI pass before NUTS. Run VI
+        # without the stored log_psd surface deterministic to keep it lightweight.
+        vi_key, _ = random.split(random.PRNGKey(random_seed))
+        init_sites, vi_losses = vi_warmstart(
+            pspline_surface_model, model_args[:-1] + (False,), init_sites,
+            rng_key=vi_key, steps=vi_steps, lr=vi_lr,
+        )
+        # Reconstruct the VI point-estimate surface from the refined sites.
+        vi_eig = reconstruct_eig_coeff_samples(
+            {k: np.asarray(init_sites[k])[None] for k in ("s", "phi_time", "phi_freq")},
+            whitened, config,
+        )[0]
+        vi_log_psd = basis_eig_time @ vi_eig @ basis_eig_freq.T
+
     kernel = NUTS(
         pspline_surface_model,
         init_strategy=init_to_value(values=init_sites),
@@ -152,6 +173,9 @@ def fit_log_pspline_surface(
         "psd_lower": np.exp(log_lower),
         "psd_upper": np.exp(log_upper),
         "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
+        "vi_losses": None if vi_losses is None else np.asarray(vi_losses),
+        "vi_log_psd": None if vi_log_psd is None else np.asarray(vi_log_psd),
+        "vi_psd_mean": None if vi_log_psd is None else np.exp(np.asarray(vi_log_psd)),
     }
 
 

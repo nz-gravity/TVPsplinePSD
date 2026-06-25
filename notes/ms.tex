@@ -13,21 +13,27 @@
 \usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{hyperref}
+\usepackage{fontawesome5}
 
 % Software / package names (matches the multivariate P-spline paper convention).
 \newcommand{\project}[1]{\textsf{#1}}
+
+% GitHub source links next to equations (matches the multivariate P-spline paper).
+% TODO: pin to a tagged release instead of main once one is cut.
+\newcommand{\repobase}{https://github.com/nz-gravity/TVPsplinePSD/blob/main}
+\DeclareRobustCommand{\codelink}[1]{\,\href{\repobase/#1}{\mbox{\scalebox{0.65}{\faGithub}}}}
 
 % Internal editorial notes / outstanding tasks. Remove before submission.
 \newcommand{\avi}[1]{\textcolor{red}{\textbf{[Avi: #1]}}}
 
 \begin{document}
 
-\title{Bayesian Non-Stationary Power Spectral Density Estimation
+\title{Bayesian Non-Stationary Spectral Density Estimation
 from Time--Frequency Data with Tensor-Product P-Splines}
 
-\author{Avi Vajpeyi}
-\email{avi.vajpeyi@gmail.com}
-\affiliation{\avi{TODO: institution}}
+\author{Authors}
+\email{author@gmail.com}
+\affiliation{Affiliation}
 
 \date{\today}
 
@@ -194,6 +200,7 @@ Kronecker-sum structure \citep{wood2017generalized}
 \mathbf{Q}(\phi_t,\phi_f)
 = \phi_t\,(\mathbf{I}_{K_f}\otimes\mathbf{P}_t)
 + \phi_f\,(\mathbf{P}_f\otimes\mathbf{I}_{K_t}),
+\codelink{tv_pspline_psd/splines.py\#L104}
 \label{eq:penalty}
 \end{equation}
 with $\phi_t, \phi_f > 0$ the time and frequency smoothing precisions. The
@@ -221,6 +228,7 @@ $s_{ab}\sim\mathcal{N}(0,1)$ and set
 \mathbf{W} = \mathbf{U}_t\,\mathbf{Z}\,\mathbf{U}_f^\top,
 \qquad
 Z_{ab} = \frac{s_{ab}}{\sqrt{d_{ab}}},
+\codelink{tv_pspline_psd/model.py\#L82}
 \label{eq:whitening}
 \end{equation}
 which reproduces $\mathcal{N}(\mathbf{0},\mathbf{Q}^{-1})$ exactly while making
@@ -380,6 +388,7 @@ from the samples $X_{t-m+1},\ldots,X_{t+m}$, are
 \mathrm{MI}_t = \frac{1}{2\pi(2m+1)}
 \left|\sum_{\nu=0}^{2m} X_{\nu+t-m}\,
 \exp\!\left(-i\pi\nu\,\lambda_{\mathrm{mod}(t)}\right)\right|^2,
+\codelink{tv_pspline_psd/moving_periodogram.py\#L36}
 \label{eq:MI}
 \end{equation}
 where $\lambda_j = \tfrac{2j}{2m+1}$, $j=1,\ldots,m$, are the Fourier frequencies
@@ -403,6 +412,7 @@ L^{(i)}_{\mathrm{DW}}(S)
 = \prod_{l=1}^{B_i}\prod_{j=1}^{m}
 \frac{1}{S(u_{j,l,i},\lambda_j)}
 \exp\!\left(-\frac{\mathrm{MI}(u_{j,l,i},\lambda_j)}{S(u_{j,l,i},\lambda_j)}\right),
+\codelink{tv_pspline_psd/moving_periodogram.py\#L100}
 \label{eq:thinned_dynamic_whittle}
 \end{equation}
 where $B_i = \lfloor (T-m)/(im)\rfloor$ and $u_{j,l,i} = (i(l-1)m+j)/T$.
@@ -432,6 +442,7 @@ The resulting log-likelihood, with $\bm{\Lambda} = \log\mathbf{S}$, is
 \mathcal{L}(\bm{\Lambda})
 = -\frac{1}{2}\sum_{n,m}
 \left[\log(2\pi) + \Lambda_{nm} + w_{nm}^2\,e^{-\Lambda_{nm}}\right].
+\codelink{tv_pspline_psd/model.py\#L119}
 \label{eq:wdm_like}
 \end{equation}
 Each pixel contributes a single $\chi^2_1$ observation; the smoothing prior of
@@ -449,6 +460,7 @@ time--frequency cell with $R$ real components contributes
 \begin{equation}
 -\tfrac{1}{2}\sum_{n,m}\Big[R\,\Lambda_{nm}
 + \big(\textstyle\sum_{r=1}^{R} c^{(r)2}_{nm}\big)\,e^{-\Lambda_{nm}}\Big],
+\codelink{tv_pspline_psd/stft.py\#L67}
 \label{eq:unified}
 \end{equation}
 so the WDM coefficient ($R=1$, $\chi^2_1$) and the complex short-time Fourier
@@ -511,6 +523,7 @@ We summarise point-estimate accuracy with the mean squared error of the log-PSD,
 \frac{1}{T(K+1)}\sum_{t=1}^{T}\sum_{j=0}^{K}
 \left(\ln\hat f\!\left(\tfrac{t}{T},\tfrac{j}{K}\right)
 - \ln f_0\!\left(\tfrac{t}{T},\tfrac{j}{K}\right)\right)^2,
+\codelink{tv_pspline_psd/metrics.py\#L15}
 \label{eq:MSE_log_psd}
 \end{equation}
 using the posterior mean as the point estimate. We also report the empirical
@@ -712,20 +725,17 @@ bounded approximation error.}
 \section{Joint signal--noise inference with a blocked-Gibbs scheme}
 \label{sec:gibbs}
 
-\avi{Work in progress. The results in this section are preliminary: the
-blocked-Gibbs scheme runs and the early numbers are encouraging, but the joint
-signal--noise behaviour needs more investigation before firm claims are drawn, and
-the framing/conclusions here should be revisited once that is complete.}
+\avi{Work in progress... I want to show that 
+(1) with stationary noise, using $S(f)$ or $S(t,f)$ leads to no biases in physical signal params, 
+(2) with non-stationary noise, the time-varying fits are necessary to avoid biases.
+Right now, i see little differences...}
 
 The same Gaussian-coefficient likelihood that recovers the noise PSD admits a
 signal mean, $c_{nm}\sim\mathcal{N}(h_{nm}(\bm\theta), S_{nm})$, so in principle
 the source parameters $\bm\theta$ and the non-stationary noise surface
 $\bm{\Lambda}$ can be inferred \emph{jointly}. We develop a blocked-Gibbs scheme
-for this joint fit and report preliminary results on a Galactic binary. We treat
-this section as work in progress: the scheme runs and the early results are
-encouraging, but the joint signal--noise behaviour requires further investigation
-before firm conclusions can be drawn. The full massive-black-hole-binary (MBHB)
-demonstration (Sec.~\ref{sec:gibbs_todo}) remains to be carried out.
+for this joint fit and report preliminary results on a Galactic binary (GB)/ massive-black-hole-binary (MBHB) / Stellar-mass black-hole binary (BBH).
+
 
 \subsection{Blocked Gibbs scheme}
 \label{sec:gibbs_scheme}
@@ -740,7 +750,8 @@ coefficients and the low-dimensional source parameters have very different
 geometries, so each block's sub-kernel can adapt independently while the Gibbs
 sweep couples them. The scheme accommodates heterogeneous sub-kernels: a
 gradient-based NUTS update for the differentiable PSD block, and a gradient-free
-update for a source model whose waveform is not differentiable.
+update for a source model whose waveform is not
+differentiable.\codelink{tv_pspline_psd/joint.py\#L172}
 
 \subsection{Proof of concept: a Galactic binary}
 \label{sec:gibbs_gb}
@@ -827,43 +838,6 @@ the regime the MBHB demonstration below targets.
     \label{fig:transient}
 \end{figure}
 
-\subsection{Future work: an MBHB demonstration}
-\label{sec:gibbs_todo}
-
-The natural next step is to replace the linear-amplitude source block with a full
-MBHB waveform and LISA response, run inside the same blocked-Gibbs loop. The
-intended demonstration is a $2\times2$ comparison. Two datasets, an MBHB in
-\emph{stationary} noise and the same MBHB in \emph{non-stationary}
-(cyclostationary) noise, are each analysed with two PSD blocks: a frequency-domain
-log-P-spline (stationary) block and the time--frequency P-spline (non-stationary)
-block of this work. Following Sec.~\ref{sec:transient}, the expectation is that
-the stationary PSD block yields miscalibrated MBHB posteriors on the
-non-stationary dataset, which the time-varying block corrects.
-
-Realising this demonstration requires only that the existing blocked-Gibbs loop
-be equipped with an MBHB source block alongside the stationary and non-stationary
-PSD blocks. The source waveform and LISA response can be generated with
-\project{BBHx} (PhenomHM/D with its built-in response wrapper)
-\avi{cite \project{BBHx} (Katz et al.), PhenomD (Husa/Khan 2016) and PhenomHM
-(London et al. 2018)}
-and the MBHB
-parameters updated with a gradient-free sampler such as \project{Eryn}
-\avi{cite \project{Eryn} (Karnesis et al. 2023)}, restricted
-to a few well-measured parameters to keep the inner loop fast, while the
-stationary comparison block reuses a frequency-domain log-P-spline
-(\project{LogPSplinePSD}) so that the two PSD blocks differ only in the
-stationarity assumption. The deliverable is the four combined runs of the
-$2\times2$ comparison and the posterior overlay that isolates the stationary
-block's bias on the non-stationary dataset. The whole construction rests on the
-two ingredients already established above: that the time-varying noise PSD is
-recoverable (Sec.~\ref{sec:lisa}), and that, for a time-localised source, using
-it rather than a stationary PSD is what calibrates the source posterior
-(Sec.~\ref{sec:transient}).
-
-\avi{Outstanding before submission: \project{BBHx} is a GPU/Linux dependency and
-the CPU build does not currently run on the target workstation, so the four
-$2\times2$ runs and the final posterior-comparison figure must be produced on a
-GPU-equipped machine.}
 
 % =====================================================================
 \section{Discussion}
