@@ -5,12 +5,16 @@ description = "Non-stationary noise PSD estimation with WDM tensor-product log-P
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "arviz-base>=1.2.0",
+    "arviz>=1.2.0",
     "jax>=0.10.1",
     "matplotlib>=3.11.0",
     "numpyro>=0.21.0",
     "optax>=0.2.8",
     "scipy>=1.13",
     "wdm-transform>=0.5.0",
+    "arviz-stats>=1.2.0",
+    "arviz-plots>=1.2.0",
 ]
 
 [project.optional-dependencies]

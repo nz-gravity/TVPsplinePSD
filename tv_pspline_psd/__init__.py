@@ -48,6 +48,12 @@ from .plotting import (  # noqa: E402
     set_paper_style,
 )
 from .stft import moving_stft, run_stft_mcmc, stft_white_noise_calibration  # noqa: E402
+from .io import (  # noqa: E402
+    load_run,
+    results_to_idata,
+    save_run,
+    surface_from_idata,
+)
 
 __all__ = [
     "PSplineConfig",
@@ -69,6 +75,10 @@ __all__ = [
     "moving_stft",
     "stft_white_noise_calibration",
     "evaluate_dense_posterior_mean",
+    "save_run",
+    "load_run",
+    "results_to_idata",
+    "surface_from_idata",
     "summarize_mcmc_diagnostics",
     "relative_surface_error",
     "mse_log_psd",

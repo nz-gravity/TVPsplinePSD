@@ -81,7 +81,6 @@ def test_ls2_smoke_runs_wdm_and_moving_periodogram(
         n_samples=12,
         num_chains=1,
         random_seed=0,
-        store_log_psd_samples=False,
     )
     stft_results = run_stft_mcmc(
         ls2_smoke_data,
@@ -92,7 +91,6 @@ def test_ls2_smoke_runs_wdm_and_moving_periodogram(
         n_samples=12,
         num_chains=1,
         random_seed=0,
-        store_log_psd_samples=False,
     )
 
     wdm_reference = true_psd_ls2(

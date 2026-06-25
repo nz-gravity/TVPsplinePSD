@@ -9,6 +9,8 @@ one real coefficient (``R = 1``); an STFT cell carries two (real and imaginary).
 
 from __future__ import annotations
 
+import time
+
 import jax.numpy as jnp
 import numpy as np
 from jax import random
@@ -43,12 +45,17 @@ def fit_log_pspline_surface(
     random_seed: int = 7,
     max_tree_depth: int = 10,
     target_accept_prob: float = 0.85,
-    store_log_psd_samples: bool = True,
     use_vi: bool = False,
     vi_steps: int = 2000,
     vi_lr: float = 1e-2,
 ) -> dict[str, object]:
     """Fit a smooth ``log S(t, f)`` surface to real time-frequency coefficients.
+
+    The per-sample ``log S`` surface is never stored: only the tiny posterior
+    sites (``s``, ``phi_time``, ``phi_freq``) are kept, and all surface summaries
+    are reconstructed from the eigen-coefficients in frequency chunks. This keeps
+    the result (and any saved artifact, see :mod:`tv_pspline_psd.io`) small while
+    letting the full surface be regenerated on demand.
 
     Args:
         coeffs: Real coefficients of shape ``(R, n_time, n_freq)`` (``R`` real
@@ -56,14 +63,10 @@ def fit_log_pspline_surface(
         time_grid: Rescaled time coordinates in ``[0, 1]``, shape ``(n_time,)``.
         freq_grid: Frequencies (Hz) of each channel, shape ``(n_freq,)``.
         config: Estimator configuration.
-        store_log_psd_samples: If True (default), keep the full ``log S`` surface
-            for every posterior sample (convenient for small grids). For very
-            large grids set False: the surface samples are not stored, and the
-            posterior summaries are reconstructed from the (tiny) eigen-
-            coefficients in frequency chunks to bound memory.
 
     Returns:
-        A results dict with the posterior PSD surface and summaries.
+        A results dict with the posterior PSD surface and summaries. Includes
+        ``nuts_runtime_s`` and (when ``use_vi``) ``vi_runtime_s`` wall-clock times.
     """
     coeffs = np.asarray(coeffs, dtype=float)
     if coeffs.ndim != 3:
@@ -113,18 +116,20 @@ def fit_log_pspline_surface(
         jnp.asarray(whitened["lam_freq"]),
         jnp.asarray(whitened["joint_null"]),
         config,
-        store_log_psd_samples,
+        False,  # never store the per-sample log_psd surface; reconstruct instead
     )
     vi_losses = None
     vi_log_psd = None
+    vi_runtime_s = None
     if use_vi:
-        # Refine the PLS init with a diagonal-guide VI pass before NUTS. Run VI
-        # without the stored log_psd surface deterministic to keep it lightweight.
+        # Refine the PLS init with a diagonal-guide VI pass before NUTS.
         vi_key, _ = random.split(random.PRNGKey(random_seed))
+        vi_t0 = time.perf_counter()
         init_sites, vi_losses = vi_warmstart(
-            pspline_surface_model, model_args[:-1] + (False,), init_sites,
+            pspline_surface_model, model_args, init_sites,
             rng_key=vi_key, steps=vi_steps, lr=vi_lr,
         )
+        vi_runtime_s = time.perf_counter() - vi_t0
         # Reconstruct the VI point-estimate surface from the refined sites.
         vi_eig = reconstruct_eig_coeff_samples(
             {k: np.asarray(init_sites[k])[None] for k in ("s", "phi_time", "phi_freq")},
@@ -142,7 +147,12 @@ def fit_log_pspline_surface(
         kernel, num_warmup=n_warmup, num_samples=n_samples, num_chains=num_chains,
         chain_method="sequential", progress_bar=False,
     )
-    mcmc.run(random.PRNGKey(random_seed), *model_args, extra_fields=("diverging",))
+    nuts_t0 = time.perf_counter()
+    mcmc.run(
+        random.PRNGKey(random_seed), *model_args,
+        extra_fields=("diverging", "accept_prob", "num_steps", "potential_energy"),
+    )
+    nuts_runtime_s = time.perf_counter() - nuts_t0
 
     samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
     eig_samples = reconstruct_eig_coeff_samples(samples, whitened, config)
@@ -173,6 +183,8 @@ def fit_log_pspline_surface(
         "psd_lower": np.exp(log_lower),
         "psd_upper": np.exp(log_upper),
         "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
+        "nuts_runtime_s": float(nuts_runtime_s),
+        "vi_runtime_s": None if vi_runtime_s is None else float(vi_runtime_s),
         "vi_losses": None if vi_losses is None else np.asarray(vi_losses),
         "vi_log_psd": None if vi_log_psd is None else np.asarray(vi_log_psd),
         "vi_psd_mean": None if vi_log_psd is None else np.exp(np.asarray(vi_log_psd)),
