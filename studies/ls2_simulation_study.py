@@ -35,6 +35,7 @@ from tv_pspline_psd import (
     mse_log_psd,
     relative_surface_error,
     run_wdm_psd_mcmc,
+    save_run,
     summarize_mcmc_diagnostics,
 )
 
@@ -85,6 +86,10 @@ def run_study(
             true_psd = calibration[None, :] * true_psd_ls2(
                 res["time_grid"], res["freq_grid"], dt
             )
+            # Persist a single exemplar fit (sampling sites + diagnostics) for
+            # later trace/divergence/loss inspection; the aggregate metrics over
+            # all repeats are saved separately as a small .npz.
+            save_run(res, RESULTS_DIR / "ls2_exemplar.nc", true_psd=true_psd)
 
         mse_ref.append(mse_log_psd(reference_psd, res["psd_mean"]))
         mse_true.append(mse_log_psd(true_psd, res["psd_mean"]))

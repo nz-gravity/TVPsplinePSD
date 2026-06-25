@@ -10,6 +10,8 @@ Gaussian *coefficient* likelihood enables; a power periodogram could not.
 
 from __future__ import annotations
 
+import time
+
 import jax.numpy as jnp
 import numpy as np
 import numpyro
@@ -755,16 +757,26 @@ def run_joint_dL_wdm_mcmc(
                   max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob)
     mcmc = MCMC(kernel, num_warmup=n_warmup, num_samples=n_samples,
                 num_chains=num_chains, chain_method="sequential", progress_bar=False)
+    nuts_t0 = time.perf_counter()
     mcmc.run(
         random.PRNGKey(random_seed), jnp.asarray(coeffs), jnp.asarray(template),
         float(d_ref), float(np.log(dl_ref)), float(dl_scale),
         jnp.asarray(basis_eig_time), jnp.asarray(basis_eig_freq),
         jnp.asarray(whitened["lam_time"]), jnp.asarray(whitened["lam_freq"]),
         jnp.asarray(whitened["joint_null"]), config,
-        extra_fields=("diverging",))
+        extra_fields=("diverging", "accept_prob", "num_steps", "potential_energy"))
+    nuts_runtime_s = time.perf_counter() - nuts_t0
     samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
     lp = samples["log_psd"]
     return {
+        "mcmc": mcmc,
+        "config": config,
+        "whitened": whitened,
+        "B_time": B_time,
+        "B_freq": B_freq,
+        "knots_time": knots_time,
+        "knots_freq": knots_freq,
+        "power": np.asarray(coeffs) ** 2,
         "samples": samples,
         "time_grid": np.asarray(time_grid),
         "freq_grid": np.asarray(freq_grid),
@@ -773,6 +785,7 @@ def run_joint_dL_wdm_mcmc(
         "psd_lower": np.exp(np.percentile(lp, 5.0, axis=0)),
         "psd_upper": np.exp(np.percentile(lp, 95.0, axis=0)),
         "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
+        "nuts_runtime_s": float(nuts_runtime_s),
     }
 
 

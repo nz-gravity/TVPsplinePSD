@@ -46,6 +46,7 @@ from tv_pspline_psd import (  # noqa: E402
     build_sobh_wdm_grid,
     make_sobh_wdm_signal_fn,
     run_joint_dL_wdm_mcmc,
+    save_run,
     wdm_analysis_coefficients,
 )
 from studies.sobh_tvpsd.fd_baseline import estimate_stationary_psd, fd_dL_posterior
@@ -128,6 +129,9 @@ def run(quick: bool = True) -> dict:
             coeffs, tg, fg, template, d_ref, config=cfg, dl_ref=dl_true,
             dl_scale=0.6, n_warmup=nw_wd, n_samples=ns_wd, random_seed=2)
         dL_tv = res_tv["dL"]
+        # Persist the joint fit (noise sites + dL + diagnostics) for later
+        # trace/divergence inspection and PSD-surface replots.
+        save_run(res_tv, RES_DIR / f"tv_fit_{case}.nc")
 
         out["cases"][case] = {
             "dL_stat": dL_stat, "dL_tv": dL_tv,

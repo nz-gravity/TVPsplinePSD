@@ -56,6 +56,13 @@ def results_to_idata(
     config: PSplineConfig = results["config"]  # type: ignore[assignment]
 
     idata = az.from_numpyro(mcmc)
+    # Joint models record the per-sample log_psd surface as a deterministic; drop
+    # it from the saved tree -- it is regenerated from the tiny sites on demand.
+    surface_vars = [
+        v for v in idata["posterior"].dataset.data_vars if str(v).startswith("log_psd")
+    ]
+    if surface_vars:
+        idata["posterior"] = idata["posterior"].dataset.drop_vars(surface_vars)
 
     basis_eig_time = np.asarray(results["B_time"]) @ np.asarray(whitened["U_time"])
     basis_eig_freq = np.asarray(results["B_freq"]) @ np.asarray(whitened["U_freq"])
