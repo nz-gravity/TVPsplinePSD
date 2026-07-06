@@ -296,9 +296,8 @@ the spectrum varies fastest. The shared model and sampler configuration is
 collected in Table~\ref{tab:config}. The per-study warm-up and draw counts, which
 differ between the noise-only and joint fits, are given with each study below. A
 single one-year joint A/E fit (two channels, signal and non-stationary noise)
-completes in $\simeq 2.5\,$min of wall time on a single workstation CPU core with
-no GPU.
-\avi{Confirm the hardware (CPU model / core count) for the wall-clock figure.}
+completes in $\simeq 2.5\,$min of wall time on a single core of an Apple M4 Pro
+workstation CPU, with no GPU.
 
 \paragraph*{Convergence diagnostics.}
 We assess convergence with standard chain
@@ -313,9 +312,9 @@ currently logged. Add logging to the study scripts.}
 \caption{Default model and sampler configuration. Interior-knot counts set the
 basis dimension as $K = (\text{interior knots}) + d + 1$. The
 moving-periodogram fits use $6$ frequency knots in place of $10$. Warm-up/draw
-counts vary by study and are stated in the text: $250/250$ for the simulation
-study, $300/250$ for the LISA noise ensemble, and $800/2000$ for the
-time-localised-source coverage study.}
+counts vary by study and are stated in the text: two chains of $500/500$ for
+the simulation study, $300/250$ for the LISA noise ensemble, and $800/2000$ for
+the time-localised-source coverage study.}
 \label{tab:config}
 \begin{ruledtabular}
 \begin{tabular}{lcc}
@@ -507,9 +506,9 @@ with analytic pointwise PSD $f_0(u,\omega) = 1 + b_1(u)^2 + 2b_1(u)\cos\omega$,
 $b_1(u) = 1.1\cos(1.5 - \cos 4\pi u)$. For each realisation we fit the model
 through the WDM likelihood, Eq.~\eqref{eq:wdm_like}, and through the
 moving-periodogram likelihood, Eq.~\eqref{eq:thinned_dynamic_whittle}, and repeat
-across four observation lengths $n = n_t\,n_f$ with $n_f = 24$ frequency bins and
-$n_t \in \{24, 48, 96, 192\}$ time bins, i.e.\ $n \in \{576, 1152, 2304, 4608\}$.
-Each fit draws $250$ warm-up and $250$ posterior samples with a single NUTS chain
+across five observation lengths $n = n_t\,n_f$ with $n_f = 24$ frequency bins and
+$n_t \in \{24, 48, 96, 192, 384\}$ time bins, i.e.\ $n \in \{576, \ldots, 9216\}$.
+Each fit runs two NUTS chains of $500$ warm-up and $500$ posterior draws
 under the configuration of Table~\ref{tab:config}.
 
 The WDM estimator targets the expected local power $\mathbb{E}[w_{nm}^2]$, which
@@ -559,11 +558,12 @@ MSE/coverage/CI-width curves to Fig.~\ref{fig:sim_mse_coverage}.}
     \centering
     \includegraphics[width=\linewidth]{figures/sim_mse_coverage.png}
     \caption{Performance versus the number of observations $n$, over $100$
-    realisations per point (median, with interquartile band where shown). Top:
-    $\mathrm{MSE}_{\log f}$. Middle: $90\%$ credible-interval coverage (nominal
-    level dotted). Bottom: median width of the $90\%$ credible interval on
-    $\log S$, contracting with $n$. One curve per observation model (WDM and
-    moving periodogram).}
+    realisations per point (median, with interquartile band where shown). From
+    top: $\mathrm{MSE}_{\log f}$; $90\%$ credible-interval coverage (nominal
+    level dotted); median width of the $90\%$ credible interval on $\log S$,
+    contracting with $n$; and per-fit sampling wall time, which is essentially
+    independent of $n$ because the latent basis dimension is fixed. One curve
+    per observation model (WDM and moving periodogram).}
     \label{fig:sim_mse_coverage}
 \end{figure}
 

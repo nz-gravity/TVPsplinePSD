@@ -17,6 +17,8 @@ time-frequency representation differs from the WDM estimator.
 
 from __future__ import annotations
 
+import time
+
 import jax.numpy as jnp
 import numpy as np
 import numpyro
@@ -161,6 +163,7 @@ def run_tang_dynamic_whittle_mcmc(
     )
     mcmc = MCMC(kernel, num_warmup=n_warmup, num_samples=n_samples,
                 num_chains=num_chains, chain_method="sequential", progress_bar=False)
+    nuts_t0 = time.perf_counter()
     mcmc.run(
         random.PRNGKey(random_seed),
         jnp.asarray(mi), jnp.asarray(basis_eig_time), jnp.asarray(basis_eig_freq),
@@ -168,6 +171,7 @@ def run_tang_dynamic_whittle_mcmc(
         jnp.asarray(whitened["joint_null"]), config,
         extra_fields=("diverging",),
     )
+    nuts_runtime_s = time.perf_counter() - nuts_t0
 
     # Evaluate the posterior PSD on a regular (u, omega) grid for comparison.
     eig_samples = np.asarray(mcmc.get_samples()["eig_coeffs"])  # (n, K_t, K_f)
@@ -188,4 +192,5 @@ def run_tang_dynamic_whittle_mcmc(
         "psd_lower": np.exp(np.percentile(log_psd_grid, 5.0, axis=0)),
         "psd_upper": np.exp(np.percentile(log_psd_grid, 95.0, axis=0)),
         "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
+        "nuts_runtime_s": float(nuts_runtime_s),
     }

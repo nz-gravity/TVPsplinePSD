@@ -8,11 +8,18 @@ Produces:
   * ``sim_three_panel.png``  (Fig 1) -- true log-PSD, WDM posterior median, and
     moving-periodogram posterior median for a single LS2 realization, shared
     colour scale.
-  * ``sim_mse_coverage.png`` (Fig 2) -- MSE_{log f} (upper) and 90% credible-
-    interval coverage (lower) versus the number of observations, one curve per
-    likelihood, each point averaged over ``--repeats`` realizations.
+  * ``sim_mse_coverage.png`` (Fig 2) -- MSE_{log f}, 90% credible-interval
+    coverage, CI width, and per-fit wall time versus the number of
+    observations, one curve per likelihood, each point over ``--repeats``
+    realizations.
+
+Metrics are saved as one shard per duration (``sim_metrics_nt{N}.npz``), so
+cluster array jobs can each run a single ``--nt`` value and the figure is
+re-rendered from all shards with ``--render-only``.
 
     python notes/scripts/make_sim_study_figures.py --repeats 20
+    python notes/scripts/make_sim_study_figures.py --nt 384 --skip-fig1  # one shard
+    python notes/scripts/make_sim_study_figures.py --render-only
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ from tv_pspline_psd import (
     run_tang_dynamic_whittle_mcmc,
     run_wdm_psd_mcmc,
     set_paper_style,
+    summarize_mcmc_diagnostics,
     tang_moving_periodogram,
 )
 
@@ -41,7 +49,7 @@ FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
 
 DT = 0.1
 NF = 24
-NT_VALUES = (24, 48, 96, 192)
+NT_VALUES = (24, 48, 96, 192, 384)
 TANG_M, TANG_THIN = 16, 2
 U_COMMON = np.linspace(0.05, 0.95, 60)
 F_COMMON = np.linspace(0.6, 4.4, 60)
@@ -62,12 +70,16 @@ def _to_common(time_grid, freq_grid, log_field):
     return interp(np.stack([uu.ravel(), ff.ravel()], axis=-1)).reshape(uu.shape)
 
 
+# Two chains of 500/500: single 250-draw chains leave rhat(phi) ~ 1.1 at the
+# largest durations, and sampling is <1 s per fit so the longer chains are free.
 def _fit_both(data, nt, seed, cal_wdm, cal_tang):
     rw = run_wdm_psd_mcmc(data, dt=DT, nt=nt, config=WDM_CONFIG,
-                          n_warmup=250, n_samples=250, random_seed=seed)
+                          n_warmup=500, n_samples=500, num_chains=2,
+                          random_seed=seed)
     rt = run_tang_dynamic_whittle_mcmc(data, dt=DT, m=TANG_M, thin=TANG_THIN,
-                                       config=TANG_CONFIG, n_warmup=250,
-                                       n_samples=250, random_seed=seed)
+                                       config=TANG_CONFIG, n_warmup=500,
+                                       n_samples=500, num_chains=2,
+                                       random_seed=seed)
     return rw, rt
 
 
@@ -88,8 +100,35 @@ def _metrics(res, cal, log_f0_common):
     return mse, cov, ci_width
 
 
+METRIC_KEYS = ("wm", "tm", "wc", "tc", "ww", "tw", "wt", "tt", "wr", "tr", "we", "te")
+
+
+def _diag_extrema(res) -> tuple[float, float]:
+    """Max r_hat / min n_eff over the smoothing-precision sites."""
+    d = summarize_mcmc_diagnostics(res)
+    return (max(d["phi_time"]["r_hat"], d["phi_freq"]["r_hat"]),
+            min(d["phi_time"]["n_eff"], d["phi_freq"]["n_eff"]))
+
+
+def _shard_path(n_total: int) -> Path:
+    return FIG_DIR / f"sim_metrics_nt{n_total:05d}.npz"
+
+
+def _load_shards() -> tuple[np.ndarray, dict[str, list]]:
+    shards = sorted(FIG_DIR.glob("sim_metrics_nt*.npz"))
+    if not shards:
+        raise FileNotFoundError(f"no sim_metrics_nt*.npz shards in {FIG_DIR}")
+    durations, raw = [], {k: [] for k in METRIC_KEYS}
+    for path in shards:
+        with np.load(path) as f:
+            durations.append(int(f["n_total"]))
+            for k in METRIC_KEYS:
+                raw[k].append(np.asarray(f[f"{k}_samples"]))
+    return np.asarray(durations), raw
+
+
 def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
-    """Render the MSE / coverage / CI-width vs. n figure from per-N samples."""
+    """Render the MSE / coverage / CI-width / runtime vs. n figure."""
     med = lambda key: np.array([np.median(a) for a in raw[key]])
     q = lambda key, p: np.array([np.percentile(a, p) for a in raw[key]])
 
@@ -99,8 +138,9 @@ def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
 
     from matplotlib.ticker import FixedLocator, NullFormatter
 
-    fig, (ax_m, ax_c, ax_w) = plt.subplots(3, 1, figsize=(3.6, 4.7), sharex=True,
-                                           constrained_layout=True)
+    fig, (ax_m, ax_c, ax_w, ax_t) = plt.subplots(4, 1, figsize=(3.6, 6.2),
+                                                 sharex=True,
+                                                 constrained_layout=True)
     _band(ax_m, "wm", "tab:blue", "o-", "WDM")
     _band(ax_m, "tm", "tab:orange", "s--", "Moving periodogram")
     ax_m.set_xscale("log"); ax_m.set_yscale("log")
@@ -116,13 +156,18 @@ def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
     _band(ax_w, "tw", "tab:orange", "s--", "Moving periodogram")
     ax_w.set_xscale("log"); ax_w.set_yscale("log")
     ax_w.set_ylabel(r"$90\%$ CI width on $\log S$")
-    ax_w.set_xlabel("Number of observations $n$")
 
-    # Explicit ticks at the four sampled lengths; the sub-decade span otherwise
+    _band(ax_t, "wt", "tab:blue", "o-", "WDM")
+    _band(ax_t, "tt", "tab:orange", "s--", "Moving periodogram")
+    ax_t.set_xscale("log"); ax_t.set_yscale("log")
+    ax_t.set_ylabel("Sampling wall time [s]")
+    ax_t.set_xlabel("Number of observations $n$")
+
+    # Explicit ticks at the sampled lengths; the sub-decade span otherwise
     # auto-labels crowded minor ticks.
-    ax_w.xaxis.set_major_locator(FixedLocator(list(durations)))
-    ax_w.xaxis.set_minor_formatter(NullFormatter())
-    ax_w.set_xticklabels([f"{int(d)}" for d in durations])
+    ax_t.xaxis.set_major_locator(FixedLocator(list(durations)))
+    ax_t.xaxis.set_minor_formatter(NullFormatter())
+    ax_t.set_xticklabels([f"{int(d)}" for d in durations])
 
     fig.savefig(FIG_DIR / "sim_mse_coverage.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -131,61 +176,61 @@ def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeats", type=int, default=100)
+    parser.add_argument("--nt", type=int, nargs="*", default=list(NT_VALUES),
+                        help="Time-bin counts to fit (each saved as its own shard); "
+                             "pass with no values to make Fig 1 and re-render only.")
+    parser.add_argument("--skip-fig1", action="store_true",
+                        help="Skip the single-realization triptych (for shard jobs).")
     parser.add_argument("--render-only", action="store_true",
-                        help="Re-render Figure 2 from the saved metrics npz (no refits).")
+                        help="Re-render Figure 2 from the saved shards (no refits).")
     args = parser.parse_args()
     FIG_DIR.mkdir(parents=True, exist_ok=True)
-    metrics_path = FIG_DIR / "sim_mse_coverage_metrics.npz"
-    metric_keys = ("wm", "tm", "wc", "tc", "ww", "tw")
+
+    if args.render_only:
+        durations, raw = _load_shards()
+        _render_metrics(durations, raw)
+        print(f"Fig 2 re-rendered from {len(durations)} shards in {FIG_DIR}")
+        return
 
     log_f0_common = np.log(true_psd_ls2(U_COMMON, F_COMMON, DT) + 1e-12)
     cal_tang = _tang_calibration()
 
     # --- Figure 1: single-realization triptych at the largest duration ---
-    nt0 = NT_VALUES[-1]
-    cal_wdm0 = wdm_white_noise_calibration(nt0 * NF, DT, nt0, WDM_CONFIG)
-    data0 = simulate_ls2(nt0 * NF, rng=np.random.default_rng(0))
-    rw0, rt0 = _fit_both(data0, nt0, 0, cal_wdm0, cal_tang)
-    panels = [
-        (log_f0_common, r"Truth: $\log f_0(t,f)$"),
-        (_to_common(rw0["time_grid"], rw0["freq_grid"],
-                    np.log(rw0["psd_mean"] / cal_wdm0[None, :] + 1e-12)),
-         "WDM"),
-        (_to_common(rt0["time_grid"], rt0["freq_grid"],
-                    np.log(rt0["psd_mean"] / cal_tang + 1e-12)),
-         "Moving periodogram"),
-    ]
-    vmin = min(p.min() for p, _ in panels)
-    vmax = max(p.max() for p, _ in panels)
-    fig, axes = plt.subplots(1, 3, figsize=(7.1, 2.4), constrained_layout=True, sharey=True)
-    for ax, (field, title) in zip(axes, panels):
-        mesh = ax.pcolormesh(U_COMMON, F_COMMON, field.T, shading="auto",
-                             cmap="viridis", vmin=vmin, vmax=vmax)
-        ax.set_title(title)
-        ax.set_xlabel("Rescaled time $u$")
-    axes[0].set_ylabel("Frequency")
-    fig.colorbar(mesh, ax=axes, shrink=0.85, label="$\\log f$")
-    fig.savefig(FIG_DIR / "sim_three_panel.png", dpi=160, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Fig 1 saved (WDM div={rw0['divergences']}, MP div={rt0['divergences']})")
+    if not args.skip_fig1:
+        nt0 = NT_VALUES[-1]
+        cal_wdm0 = wdm_white_noise_calibration(nt0 * NF, DT, nt0, WDM_CONFIG)
+        data0 = simulate_ls2(nt0 * NF, rng=np.random.default_rng(0))
+        rw0, rt0 = _fit_both(data0, nt0, 0, cal_wdm0, cal_tang)
+        panels = [
+            (log_f0_common, r"Truth: $\log f_0(t,f)$"),
+            (_to_common(rw0["time_grid"], rw0["freq_grid"],
+                        np.log(rw0["psd_mean"] / cal_wdm0[None, :] + 1e-12)),
+             "WDM"),
+            (_to_common(rt0["time_grid"], rt0["freq_grid"],
+                        np.log(rt0["psd_mean"] / cal_tang + 1e-12)),
+             "Moving periodogram"),
+        ]
+        vmin = min(p.min() for p, _ in panels)
+        vmax = max(p.max() for p, _ in panels)
+        fig, axes = plt.subplots(1, 3, figsize=(7.1, 2.4), constrained_layout=True, sharey=True)
+        for ax, (field, title) in zip(axes, panels):
+            mesh = ax.pcolormesh(U_COMMON, F_COMMON, field.T, shading="auto",
+                                 cmap="viridis", vmin=vmin, vmax=vmax)
+            ax.set_title(title)
+            ax.set_xlabel("Rescaled time $u$")
+        axes[0].set_ylabel("Frequency")
+        fig.colorbar(mesh, ax=axes, shrink=0.85, label="$\\log f$")
+        fig.savefig(FIG_DIR / "sim_three_panel.png", dpi=160, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Fig 1 saved (WDM div={rw0['divergences']}, MP div={rt0['divergences']})")
 
-    # --- Figure 2: MSE, coverage, and CI width vs number of observations ---
+    # --- Figure 2: MSE, coverage, CI width, and runtime vs observations ---
     # Keep every repeat so we can show the spread (median + interquartile band).
-    if args.render_only:
-        cached = np.load(metrics_path)
-        durations = list(np.asarray(cached["n_total"]))
-        raw = {k: list(np.asarray(cached[f"{k}_samples"])) for k in metric_keys}
-        _render_metrics(np.asarray(durations), raw)
-        print(f"Fig 2 re-rendered from {metrics_path}")
-        return
-
-    durations = []
-    raw = {k: [] for k in metric_keys}  # per-N lists of arrays
     div_total = 0
-    for nt in NT_VALUES:
+    for nt in args.nt:
         n_total = nt * NF
         cal_wdm = wdm_white_noise_calibration(n_total, DT, nt, WDM_CONFIG)
-        rep = {k: [] for k in ("wm", "tm", "wc", "tc", "ww", "tw")}
+        rep = {k: [] for k in METRIC_KEYS}
         t0 = time.time()
         for r in range(args.repeats):
             seed = 6000 + r
@@ -194,21 +239,27 @@ def main() -> None:
             div_total += rw["divergences"] + rt["divergences"]
             mw, cw, ww = _metrics(rw, cal_wdm, log_f0_common)
             mt, ct, wt = _metrics(rt, cal_tang, log_f0_common)
+            rhat_w, neff_w = _diag_extrema(rw)
+            rhat_t, neff_t = _diag_extrema(rt)
             rep["wm"].append(mw); rep["tm"].append(mt)
             rep["wc"].append(cw); rep["tc"].append(ct)
             rep["ww"].append(ww); rep["tw"].append(wt)
-        durations.append(n_total)
-        for k in raw:
-            raw[k].append(np.asarray(rep[k]))
+            rep["wt"].append(rw["nuts_runtime_s"]); rep["tt"].append(rt["nuts_runtime_s"])
+            rep["wr"].append(rhat_w); rep["tr"].append(rhat_t)
+            rep["we"].append(neff_w); rep["te"].append(neff_t)
+        np.savez(_shard_path(n_total), n_total=n_total, repeats=args.repeats,
+                 **{f"{k}_samples": np.asarray(rep[k]) for k in METRIC_KEYS})
         print(f"n={n_total:6d}  WDM mse={np.median(rep['wm']):.3f} "
-              f"cov={np.mean(rep['wc']):.2f} ciw={np.median(rep['ww']):.2f}  "
+              f"cov={np.mean(rep['wc']):.2f} ciw={np.median(rep['ww']):.2f} "
+              f"t={np.median(rep['wt']):.1f}s rhat<={np.max(rep['wr']):.3f} "
+              f"neff>={np.min(rep['we']):.0f}  "
               f"MP mse={np.median(rep['tm']):.3f} cov={np.mean(rep['tc']):.2f} "
-              f"ciw={np.median(rep['tw']):.2f}  ({time.time()-t0:.0f}s)")
+              f"ciw={np.median(rep['tw']):.2f} t={np.median(rep['tt']):.1f}s "
+              f"rhat<={np.max(rep['tr']):.3f} neff>={np.min(rep['te']):.0f}  "
+              f"({time.time()-t0:.0f}s)")
     print(f"total divergences: {div_total}  ({args.repeats} repeats/point)")
 
-    durations = np.asarray(durations)
-    np.savez(metrics_path, n_total=durations, repeats=args.repeats,
-             **{f"{k}_samples": np.stack(raw[k]) for k in raw})
+    durations, raw = _load_shards()
     _render_metrics(durations, raw)
     print(f"Fig 2 saved to {FIG_DIR}")
 
