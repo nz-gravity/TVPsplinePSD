@@ -3,6 +3,7 @@
 
 1 venv:
 
-module load gcc/12.3.0 python/3.11.3
+module load gcc/13.3.0 python/3.12.3
+source /fred/oz303/avajpeyi/codes/TVPsplinePSD/.venv/bin/activate
 
 

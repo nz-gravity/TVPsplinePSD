@@ -13,21 +13,13 @@
 
 module purge
 module load gcc/13.3.0 python/3.12.3
+source 
 
 set -euo pipefail
 mkdir -p logs
 
 NT_VALUES=(24 48 96 192 384)
 NT=${NT_VALUES[$SLURM_ARRAY_TASK_ID]}
-
-# ponytail: one shared venv built by the first task that gets there;
-# switch to a setup job dependency if the race ever bites.
-VENV=${VENV:-$PWD/.venv-ozstar}
-if [ ! -d "$VENV" ]; then
-    python -m venv "$VENV"
-    "$VENV/bin/pip" install -e .
-fi
-source "$VENV/bin/activate"
 
 export JAX_PLATFORMS=cpu
 python notes/scripts/make_sim_study_figures.py \
