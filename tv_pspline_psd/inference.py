@@ -20,6 +20,7 @@ from wdm_transform import TimeSeries
 from .config import PSplineConfig
 from .model import (
     initialize_with_penalized_least_squares,
+    power_floor,
     pspline_surface_model,
     whiten_penalty_pair,
     whitened_init_values,
@@ -76,7 +77,7 @@ def fit_log_pspline_surface(
 
     time_interior_knots = None
     if config.adaptive_time_knots:
-        pilot = np.mean(np.log(power + 1e-8), axis=1)
+        pilot = np.mean(np.log(power + power_floor(power)), axis=1)
         time_interior_knots = create_adaptive_time_knots(
             time_grid, pilot,
             n_interior_knots=config.n_interior_knots_time,

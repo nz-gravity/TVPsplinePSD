@@ -27,6 +27,19 @@ import numpyro.distributions as dist
 from .config import PSplineConfig
 
 
+def power_floor(power: np.ndarray) -> float:
+    """Scale-free floor for ``log(power + floor)`` targets.
+
+    A small fraction of a low percentile of the *nonzero* power, so the floor
+    tracks the data scale (absolute floors like 1e-8 swamp tiny-amplitude data,
+    e.g. LISA fractional-frequency series with power ~1e-40).
+    """
+    positive = power[power > 0]
+    if positive.size == 0:
+        return 1.0
+    return 0.05 * float(np.percentile(positive, 10.0))
+
+
 def whiten_penalty_pair(
     penalty_time: np.ndarray,
     penalty_freq: np.ndarray,
@@ -156,7 +169,7 @@ def initialize_with_penalized_least_squares(
     Returns the fitted coefficient matrix ``W`` and heuristic smoothing
     precisions; :func:`whitened_init_values` converts these to the model sites.
     """
-    floor = max(1e-8, 0.05 * np.percentile(observed_power, 10.0))
+    floor = power_floor(observed_power)
     target = np.log(observed_power + floor).reshape(-1, order="F")
     kron_time = np.kron(np.eye(B_freq.shape[1]), penalty_time)
     kron_freq = np.kron(penalty_freq, np.eye(B_time.shape[1]))
