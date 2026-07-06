@@ -27,7 +27,12 @@ from jax import random
 from numpyro.infer import MCMC, NUTS, init_to_value
 
 from .config import PSplineConfig
-from .model import _sample_log_gamma, whiten_penalty_pair, whitened_init_values
+from .model import (
+    _sample_log_gamma,
+    power_floor,
+    whiten_penalty_pair,
+    whitened_init_values,
+)
 from .splines import (
     create_bspline_basis,
     create_bspline_roughness_penalty,
@@ -80,7 +85,7 @@ def tang_moving_periodogram(
 def _scattered_pls_init(mi, B_time, B_freq, P_time, P_freq, config):
     """Penalized least-squares warm start on scattered log-ordinates."""
     n_t, n_f = B_time.shape[1], B_freq.shape[1]
-    floor = max(1e-8, 0.05 * np.percentile(mi, 10.0))
+    floor = power_floor(mi)
     target = np.log(mi + floor)
     # design[p, s*n_t + r] = B_freq[p, s] * B_time[p, r]   (matches vec_F(W))
     design = (B_freq[:, :, None] * B_time[:, None, :]).reshape(mi.size, n_f * n_t)
