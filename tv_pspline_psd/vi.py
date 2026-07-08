@@ -29,6 +29,7 @@ def vi_warmstart(
     rng_key,
     steps: int = 2000,
     lr: float = 1e-2,
+    progress_bar: bool = True,
 ) -> tuple[dict[str, jnp.ndarray], jnp.ndarray]:
     """Refine analytic ``init_sites`` with diagonal-guide VI.
 
@@ -40,6 +41,7 @@ def vi_warmstart(
         rng_key: JAX PRNG key.
         steps: Number of SVI iterations.
         lr: Adam learning rate.
+        progress_bar: Show the SVI iteration progress bar.
 
     Returns:
         ``(refined_init_sites, losses)`` -- the VI posterior medians merged over
@@ -50,7 +52,7 @@ def vi_warmstart(
     )
     optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(lr))
     svi = SVI(model, guide, optimizer, loss=Trace_ELBO())
-    result = svi.run(rng_key, steps, *model_args, progress_bar=False)
+    result = svi.run(rng_key, steps, *model_args, progress_bar=progress_bar)
     median = guide.median(result.params)
     refined = {**init_sites, **{k: v for k, v in median.items() if k in init_sites}}
     return refined, result.losses

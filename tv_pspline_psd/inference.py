@@ -49,6 +49,7 @@ def fit_log_pspline_surface(
     use_vi: bool = False,
     vi_steps: int = 2000,
     vi_lr: float = 1e-2,
+    progress_bar: bool = True,
 ) -> dict[str, object]:
     """Fit a smooth ``log S(t, f)`` surface to real time-frequency coefficients.
 
@@ -64,6 +65,8 @@ def fit_log_pspline_surface(
         time_grid: Rescaled time coordinates in ``[0, 1]``, shape ``(n_time,)``.
         freq_grid: Frequencies (Hz) of each channel, shape ``(n_freq,)``.
         config: Estimator configuration.
+        progress_bar: Show the NUTS (and VI warm-start) progress bar. Set False
+            for quiet batch runs.
 
     Returns:
         A results dict with the posterior PSD surface and summaries. Includes
@@ -128,7 +131,7 @@ def fit_log_pspline_surface(
         vi_t0 = time.perf_counter()
         init_sites, vi_losses = vi_warmstart(
             pspline_surface_model, model_args, init_sites,
-            rng_key=vi_key, steps=vi_steps, lr=vi_lr,
+            rng_key=vi_key, steps=vi_steps, lr=vi_lr, progress_bar=progress_bar,
         )
         vi_runtime_s = time.perf_counter() - vi_t0
         # Reconstruct the VI point-estimate surface from the refined sites.
@@ -146,7 +149,7 @@ def fit_log_pspline_surface(
     )
     mcmc = MCMC(
         kernel, num_warmup=n_warmup, num_samples=n_samples, num_chains=num_chains,
-        chain_method="sequential", progress_bar=False,
+        chain_method="sequential", progress_bar=progress_bar,
     )
     nuts_t0 = time.perf_counter()
     mcmc.run(
@@ -250,7 +253,11 @@ def surface_summaries(
     upper = np.empty((n_t, n_f))
     for j0 in range(0, n_f, freq_chunk):
         bf = basis_eig_freq[j0:j0 + freq_chunk]
-        chunk = np.einsum("ta,nab,jb->ntj", basis_eig_time, eig_samples, bf)
+        # optimize=True factorises the 3-operand contraction into two BLAS
+        # matmuls; without it numpy falls back to a naive element-wise kernel
+        # that scales catastrophically on large (time x freq) grids.
+        chunk = np.einsum("ta,nab,jb->ntj", basis_eig_time, eig_samples, bf,
+                          optimize=True)
         lower[:, j0:j0 + freq_chunk] = np.percentile(chunk, lower_pct, axis=0)
         upper[:, j0:j0 + freq_chunk] = np.percentile(chunk, upper_pct, axis=0)
     return log_mean, lower, upper
