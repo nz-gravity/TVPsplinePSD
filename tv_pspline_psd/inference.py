@@ -253,7 +253,11 @@ def surface_summaries(
     upper = np.empty((n_t, n_f))
     for j0 in range(0, n_f, freq_chunk):
         bf = basis_eig_freq[j0:j0 + freq_chunk]
-        chunk = np.einsum("ta,nab,jb->ntj", basis_eig_time, eig_samples, bf)
+        # optimize=True factorises the 3-operand contraction into two BLAS
+        # matmuls; without it numpy falls back to a naive element-wise kernel
+        # that scales catastrophically on large (time x freq) grids.
+        chunk = np.einsum("ta,nab,jb->ntj", basis_eig_time, eig_samples, bf,
+                          optimize=True)
         lower[:, j0:j0 + freq_chunk] = np.percentile(chunk, lower_pct, axis=0)
         upper[:, j0:j0 + freq_chunk] = np.percentile(chunk, upper_pct, axis=0)
     return log_mean, lower, upper
