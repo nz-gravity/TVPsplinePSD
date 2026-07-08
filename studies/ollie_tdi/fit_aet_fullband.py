@@ -10,13 +10,13 @@ combination is applied,
     A = (Z - X)/sqrt(2),  E = (X - 2Y + Z)/sqrt(6),  T = (X + Y + Z)/sqrt(3),
 
 and its residual cross-channel coherence is measured to quantify the
-approximation. Each channel is brick-wall decimated to Nyquist = 1 Hz so the
-analysis band is the full LISA band 1e-4..1 Hz, then fitted with the WDM
-log-P-spline estimator.
+approximation. Each channel is brick-wall decimated to Nyquist = 0.125 Hz so
+the analysis band is 1e-4..0.1 Hz, then fitted with the WDM log-P-spline
+estimator.
 
-The frequency knots are placed via a warped coordinate: log-spaced over
-1e-4..0.1 Hz (smooth instrument spectrum) and linear over 0.1..1 Hz, where the
-TDI transfer-function nulls (spacing ~0.15 Hz, half-depth width ~0.06 Hz) need
+The frequency knots are placed via a warped coordinate: log-spaced over the
+smooth instrument spectrum below 0.02 Hz and linear above, where the TDI
+transfer-function nulls (comb at 1/L ~ 0.030 Hz: 0.03, 0.06, 0.09 Hz) need
 dense knots. The fit itself is coordinate-agnostic, so the warp only moves
 knots.
 
@@ -54,14 +54,19 @@ DATA_FULL = DATA_DIR / "simulated_noise_30_days_L1_ext.h5"
 DATA_SEGMENTS = DATA_DIR / "lisa_sim_processed_segments_30_days_ext.h5"
 RESULTS_DIR = REPO / "studies" / "results" / "ollie_tdi"
 
-DECIMATE = 2            # 0.25 s -> 0.5 s, Nyquist exactly 1 Hz
-F_LO, F_BREAK, F_HI = 1e-4, 0.1, 1.0
-# ponytail: 60 linear knots = 0.015 Hz spacing, ~2 per null period (comb at
-# ~0.0295 Hz) — resolves the comb, not the 6-decade null cores.
-N_KNOTS_LOG, N_KNOTS_LIN = 30, 60
+DECIMATE = 15           # 0.25 s -> 3.75 s, Nyquist 0.133 Hz (band 1e-4..0.1 Hz);
+                        # 15 keeps both the 30-day and 7-day lengths divisible by nt
+F_LO, F_BREAK, F_HI = 1e-4, 0.02, 1.0 / (2 * 0.25 * 15)
+# Log knots cover the smooth spectrum below the first null; linear knots at
+# ~0.0015 Hz spacing (~20 per null period, comb at 1/L ~ 0.030 Hz) resolve
+# the null flanks. The cores (6 decades deep) remain smoothed by design.
+N_KNOTS_LOG, N_KNOTS_LIN = 24, 70
 # WDM time bins / trimmed low channels per data source. nt keeps the time
 # resolution at ~2.6-5.6 h; the low trim puts the band edge at ~1e-4 Hz.
 GRID = {"full": (128, 4), "seg0": (64, 2), "seg1": (64, 2)}
+# ~22 h per edge: the null channels are sensitive enough to see boundary
+# wrap-around that the broadband cells hide.
+TRIM_TIME_BINS = 4
 
 
 def load_aet(source: str) -> tuple[dict[str, np.ndarray], float]:
@@ -227,7 +232,7 @@ def main() -> None:
     config = PSplineConfig(
         n_interior_knots_freq=N_KNOTS_LOG + N_KNOTS_LIN,
         trim_low_freq_channels=trim_low,
-        trim_time_bins=2,
+        trim_time_bins=TRIM_TIME_BINS,
         centered=not args.non_centered,
     )
     coeffs, time_grid, freq_grid = wdm_analysis_coefficients(data, dt, nt, config)
@@ -325,8 +330,8 @@ def main() -> None:
 
     # 3) Time variation at null flanks vs a mid-band control frequency.
     fig, ax = plt.subplots(figsize=(3.6, 2.4), constrained_layout=True)
-    for f_target, lab in ((0.30, "null 0.30 Hz"), (0.72, "null 0.72 Hz"),
-                          (0.05, "control 0.05 Hz")):
+    for f_target, lab in ((0.03, "null 0.03 Hz"), (0.06, "null 0.06 Hz"),
+                          (0.01, "control 0.01 Hz")):
         j = int(np.argmin(np.abs(fg - f_target)))
         med = np.median(S_est[:, j])
         ax.plot(tg_days, S_est[:, j] / med, label=lab)

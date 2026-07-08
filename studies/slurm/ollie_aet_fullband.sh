@@ -7,7 +7,7 @@
 #SBATCH --time=48:00:00
 #SBATCH --output=logs/ollie_aet_%A_%a.out
 
-# Full-band (1e-4..1 Hz) TV-PSD fit of the AET channels built from Ollie's
+# LISA-band (1e-4..0.1 Hz) TV-PSD fit of the AET channels built from Ollie's
 # 30-day unequal-arm XYZ TDI, one channel per array task.
 # Uses the centered parameterization (script default): the non-centered form
 # froze phi on this grid (r_hat 2.9-9.0); centered mixes at r_hat ~ 1.00.
