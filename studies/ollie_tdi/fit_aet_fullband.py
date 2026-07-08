@@ -236,6 +236,7 @@ def main() -> None:
         # dropping the corrupted rows: the knots still span the gaps and the
         # posterior widens there.
         keep = good_time_bins(time_grid, t_obs_s, gaps, nt)
+        tg_full_days = time_grid * t_obs_s / 86400  # for the raw-power panel
         coeffs, time_grid = coeffs[keep], time_grid[keep]
         print(f"[gaps] dropped {np.count_nonzero(~keep)} of {keep.size} time bins")
     print(f"[wdm] grid {coeffs.shape[0]} x {coeffs.shape[1]}, "
@@ -282,10 +283,23 @@ def main() -> None:
     fig, axes = plt.subplots(1, 2, figsize=(7.1, 2.6), constrained_layout=True,
                              sharey=True)
     raw_pow = np.log(res["power"] + 1e-300) + np.log(to_psd)
-    mesh0 = axes[0].pcolormesh(tg_days, fg, raw_pow.T, shading="auto", cmap="viridis")
+    if gaps:
+        # Show the masked bins as holes rather than letting pcolormesh
+        # stretch neighbours across them; the posterior panel keeps the
+        # bridged surface, with the gaps marked.
+        raw_full = np.full((keep.size, raw_pow.shape[1]), np.nan)
+        raw_full[keep] = raw_pow
+        mesh0 = axes[0].pcolormesh(tg_full_days, fg, raw_full.T, shading="auto",
+                                   cmap="viridis")
+    else:
+        mesh0 = axes[0].pcolormesh(tg_days, fg, raw_pow.T, shading="auto",
+                                   cmap="viridis")
     axes[0].set_title("raw WDM log power")
     axes[1].pcolormesh(tg_days, fg, np.log(S_est).T, shading="auto", cmap="viridis",
                        vmin=mesh0.get_clim()[0], vmax=mesh0.get_clim()[1])
+    for t0_g, t1_g in gaps:
+        axes[1].axvspan(t0_g / 86400, t1_g / 86400, facecolor="none",
+                        edgecolor="white", hatch="//", lw=0.0)
     axes[1].set_title(r"posterior mean $\log \hat S(t,f)$")
     for ax in axes:
         ax.set_yscale("log")
