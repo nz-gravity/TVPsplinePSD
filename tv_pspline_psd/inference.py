@@ -207,9 +207,11 @@ def reconstruct_eig_coeff_samples(
     joint_null = whitened["joint_null"]
     n_t, n_f = lam_t.size, lam_f.size
 
+    s = samples["s"].reshape(-1, n_t, n_f)
+    if config.centered:
+        return s
     phi_time = np.exp(samples["phi_time"])[:, None, None]  # the site stores log phi
     phi_freq = np.exp(samples["phi_freq"])[:, None, None]
-    s = samples["s"].reshape(-1, n_t, n_f)
     d = phi_time * lam_t[None, :, None] + phi_freq * lam_f[None, None, :]
     scale = np.where(
         joint_null[None],

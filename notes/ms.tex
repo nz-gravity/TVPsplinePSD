@@ -282,7 +282,11 @@ log-spline surface $\bm{\Lambda} = (\mathbf{B}_t\mathbf{U}_t)\,\mathbf{Z}\,
 (\mathbf{B}_f\mathbf{U}_f)^\top$, and evaluate the observation-model
 log-likelihood $\mathcal{L}(\bm{\Lambda})$ of Sec.~\ref{sec:obs}. The basis and
 eigenvector products are precomputed once, so each evaluation is a pair of dense
-matrix products followed by the likelihood.
+matrix products followed by the likelihood. This factorisation relies on the
+coefficients sharing a common $n_t\times n_f$ grid, which holds for the WDM
+front end (Sec.~\ref{sec:wdm}) but not for the moving periodogram's scattered
+ordinates (Sec.~\ref{sec:movperiod}), with a corresponding cost difference
+discussed there.
 
 \paragraph*{Implementation.}
 We implement the model in \project{JAX}~\citep{jax2018github} with
@@ -304,9 +308,11 @@ We assess convergence with standard chain
 diagnostics~\citep{gelman1992inference,arviz_2019}: the rank-normalised
 Gelman--Rubin statistic $\hat R<1.01$, bulk and tail effective sample sizes above
 a few hundred, and the absence of divergent transitions and maximum tree-depth
-saturation. No fit in any study produced sampler divergences.
-\avi{Report the actual $\hat R$/ESS for a representative fit --- these are not
-currently logged. Add logging to the study scripts.}
+saturation. No fit in any study produced sampler divergences. Across the
+$1000$ simulation-study fits of Sec.~\ref{sec:sim} the slowest-mixing sites are
+the two smoothing precisions: their rank-normalised $\hat R$ has median
+$1.005$ and never exceeds $1.07$, with median bulk effective sample size
+$150$--$400$ per fit.
 
 \begin{table}[t]
 \caption{Default model and sampler configuration. Interior-knot counts set the
@@ -425,6 +431,24 @@ exponential, which is exact only asymptotically and requires the spectrum to be
 approximately constant across a window. Thinning trades data for reduced
 inter-ordinate correlation, and because it works with the power periodogram it
 discards phase.
+
+\paragraph*{Cost of the scattered ordinates.} The zigzag ordinates
+$(u_{j,l,i},\lambda_j)$ do not sit on a shared time--frequency grid, so
+$\bm{\Lambda}$ cannot be assembled with the two dense matrix products of
+Sec.~\ref{sec:inference}. Instead each ordinate needs its own basis row,
+\begin{equation}
+\log S(u_p,\lambda_p) = \sum_b \left(\mathbf{B}_t\mathbf{U}_t\right)_{p,\cdot}\mathbf{Z}\,
+\left(\mathbf{B}_f\mathbf{U}_f\right)_{p,\cdot}^\top,
+\codelink{tv_pspline_psd/moving_periodogram.py\#L116}
+\end{equation}
+evaluated independently at each of the $P\simeq n/2$ ordinates, at a cost
+$\mathcal{O}(P\,K_t K_f)$ that scales with the number of ordinates rather than
+with the two grid axes separately, $\mathcal{O}(n_t K_t K_f + n_t n_f K_f)$ for
+the WDM front end. This is why the moving-periodogram fits are consistently
+slower per NUTS step than the WDM fits at matched $n$
+(Fig.~\ref{fig:sim_mse_coverage}, bottom panel): the price of a scattered
+time--frequency design, not a property of the dynamic Whittle likelihood
+itself.
 
 \subsection{WDM likelihood}
 \label{sec:wdm}
@@ -561,25 +585,38 @@ MSE/coverage/CI-width curves to Fig.~\ref{fig:sim_mse_coverage}.}
     realisations per point (median, with interquartile band where shown). From
     top: $\mathrm{MSE}_{\log f}$; $90\%$ credible-interval coverage (nominal
     level dotted); median width of the $90\%$ credible interval on $\log S$,
-    contracting with $n$; and per-fit sampling wall time, which is essentially
-    independent of $n$ because the latent basis dimension is fixed. One curve
-    per observation model (WDM and moving periodogram).}
+    contracting with $n$; and per-fit sampling wall time (two NUTS chains of
+    $500$ warm-up and $500$ draws), growing sublinearly with $n$ since the
+    latent basis dimension is fixed and only the likelihood evaluation scales
+    with the data. One curve per observation model (WDM and moving
+    periodogram).}
     \label{fig:sim_mse_coverage}
 \end{figure}
 
 \subsection{Results}
 Both observation models recover the time-varying surface and contract with the
-data (Fig.~\ref{fig:sim_mse_coverage}). Over $100$ realisations at each of four
-observation lengths ($n = 576$ to $4608$), the median $\mathrm{MSE}_{\log f}$
-falls monotonically with $n$ for both likelihoods, the $90\%$ credible-interval
-coverage stays close to nominal, and the credible-interval width on $\log S$
-contracts steadily with $n$, as expected. No sampler divergence occurred in any
-fit. On this smooth process the moving periodogram has the lower median
-$\mathrm{MSE}_{\log f}$ at matched $n$, though the gap is comparable to the
-interquartile spread across realisations \avi{state whether the separation
-exceeds the IQR band (i.e. whether it is significant). If not, soften to
-``comparable''}. We return in Sec.~\ref{sec:discussion} to why the WDM front end
-is nonetheless preferable for phase-coherent inference.
+data (Fig.~\ref{fig:sim_mse_coverage}). Over $100$ realisations at each of five
+observation lengths ($n = 576$ to $9216$), the median $\mathrm{MSE}_{\log f}$
+falls monotonically with $n$ for both likelihoods (WDM: $0.20$ to $0.025$), and
+the $90\%$ credible-interval width on $\log S$ contracts steadily,
+approximately as $n^{-1/2}$. On this smooth process the moving periodogram has
+the lower median $\mathrm{MSE}_{\log f}$ at the shorter lengths --- the
+separation exceeds the interquartile band up to $n = 4608$ --- but the gap
+closes with $n$ and the two likelihoods coincide at $n = 9216$. Coverage of the
+$90\%$ intervals is near-nominal at the shorter lengths ($0.89$--$0.90$ for the
+WDM up to $n = 2304$) and drifts below nominal as $n$ grows ($0.84$ for the
+WDM and $0.74$ for the moving periodogram at $n = 9216$): with the basis
+dimension held fixed, the residual smoothing bias does not shrink while the
+credible interval keeps contracting, so the intervals become progressively
+overconfident --- the usual behaviour of a fixed-dimension smoother, curable by
+letting the knot count grow with $n$. Per-fit sampling cost grows sublinearly,
+from $2$ to $15\,$s (WDM) and $2$ to $27\,$s (moving periodogram) across the
+$16\times$ span in $n$ (bottom panel of Fig.~\ref{fig:sim_mse_coverage},
+hardware as in Sec.~\ref{sec:model}); the moving periodogram is consistently
+the slower of the two because its scattered zigzag ordinates cannot use the
+grid factorisation of Sec.~\ref{sec:inference}, as detailed in
+Sec.~\ref{sec:movperiod}. We return in Sec.~\ref{sec:discussion} to
+why the WDM front end is nonetheless preferable for phase-coherent inference.
 
 % =====================================================================
 \section{Recovering a non-stationary LISA foreground}

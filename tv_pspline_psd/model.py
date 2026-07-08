@@ -138,9 +138,15 @@ def pspline_surface_model(
     )
 
     n_weights = n_basis_time * n_basis_freq
-    with numpyro.plate("eig_coeffs", n_weights):
-        s_flat = numpyro.sample("s", dist.Normal(0.0, 1.0))
-    eig_coeffs = s_flat.reshape((n_basis_time, n_basis_freq)) * scale
+    if config.centered:
+        # Centered: the site *is* the eigen-coefficient, prior N(0, 1/sqrt(d)).
+        with numpyro.plate("eig_coeffs", n_weights):
+            s_flat = numpyro.sample("s", dist.Normal(0.0, scale.reshape(-1)))
+        eig_coeffs = s_flat.reshape((n_basis_time, n_basis_freq))
+    else:
+        with numpyro.plate("eig_coeffs", n_weights):
+            s_flat = numpyro.sample("s", dist.Normal(0.0, 1.0))
+        eig_coeffs = s_flat.reshape((n_basis_time, n_basis_freq)) * scale
 
     log_psd = basis_eig_time @ eig_coeffs @ basis_eig_freq.T
 
@@ -170,27 +176,31 @@ def initialize_with_penalized_least_squares(
     precisions; :func:`whitened_init_values` converts these to the model sites.
     """
     floor = power_floor(observed_power)
-    target = np.log(observed_power + floor).reshape(-1, order="F")
+    target = np.log(observed_power + floor)
     kron_time = np.kron(np.eye(B_freq.shape[1]), penalty_time)
     kron_freq = np.kron(penalty_freq, np.eye(B_time.shape[1]))
-    design = np.kron(B_freq, B_time)
+    # The design is kron(B_freq, B_time), so its Gram is the Kronecker of the
+    # per-axis Grams and the projection is B_t^T Y B_f: never form the
+    # O(n_time*n_freq x n_basis) design matrix.
+    n_basis = B_time.shape[1] * B_freq.shape[1]
     system = (
-        design.T @ design
+        np.kron(B_freq.T @ B_freq, B_time.T @ B_time)
         + config.init_penalty_time * kron_time
         + config.init_penalty_freq * kron_freq
-        + config.ridge_eps * np.eye(design.shape[1])
+        + config.ridge_eps * np.eye(n_basis)
     )
-    weights = np.linalg.solve(system, design.T @ target)
-    fitted = (design @ weights).reshape(observed_power.shape, order="F")
+    rhs = (B_time.T @ target @ B_freq).reshape(-1, order="F")
+    weights = np.linalg.solve(system, rhs)
+    W_fit = weights.reshape((B_time.shape[1], B_freq.shape[1]), order="F")
+    fitted = B_time @ W_fit @ B_freq.T
 
     penalty_time_energy = float(weights @ kron_time @ weights)
     penalty_freq_energy = float(weights @ kron_freq @ weights)
     phi_time_init = max(1e-2, fitted.size / (penalty_time_energy + 1e-6))
     phi_freq_init = max(1e-2, fitted.size / (penalty_freq_energy + 1e-6))
 
-    W = weights.reshape((B_time.shape[1], B_freq.shape[1]), order="F")
     return {
-        "W": W,
+        "W": W_fit,
         "phi_time": phi_time_init,
         "phi_freq": phi_freq_init,
         "log_psd": fitted,
@@ -213,13 +223,16 @@ def whitened_init_values(
     phi_freq = float(pls_init["phi_freq"])
     eig_coeffs = U_t.T @ np.asarray(pls_init["W"]) @ U_f  # Z in the eigenbasis
 
-    d = phi_time * lam_t[:, None] + phi_freq * lam_f[None, :]
-    inv_scale = np.where(
-        joint_null,
-        np.sqrt(config.null_precision),
-        np.sqrt(d + config.ridge_eps),
-    )
-    s = eig_coeffs * inv_scale
+    if config.centered:
+        s = eig_coeffs
+    else:
+        d = phi_time * lam_t[:, None] + phi_freq * lam_f[None, :]
+        inv_scale = np.where(
+            joint_null,
+            np.sqrt(config.null_precision),
+            np.sqrt(d + config.ridge_eps),
+        )
+        s = eig_coeffs * inv_scale
     return {
         "s": s.reshape(-1),
         "phi_time": float(np.log(phi_time)),

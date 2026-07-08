@@ -13,7 +13,7 @@
 
 module purge
 module load gcc/13.3.0 python/3.12.3
-source 
+source /fred/oz303/avajpeyi/codes/TVPsplinePSD/.venv/bin/activate
 
 set -euo pipefail
 mkdir -p logs

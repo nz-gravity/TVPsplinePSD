@@ -15,11 +15,15 @@ Produces:
 
 Metrics are saved as one shard per duration (``sim_metrics_nt{N}.npz``), so
 cluster array jobs can each run a single ``--nt`` value and the figure is
-re-rendered from all shards with ``--render-only``.
+re-rendered from all shards with ``--render-only``. Every render also writes a
+long-format ``sim_metrics.csv`` (one row per realization) next to the shards --
+edit values there and pass ``--from-csv`` to re-render Fig 2 from the edited
+file without touching the npz shards.
 
     python notes/scripts/make_sim_study_figures.py --repeats 20
     python notes/scripts/make_sim_study_figures.py --nt 384 --skip-fig1  # one shard
     python notes/scripts/make_sim_study_figures.py --render-only
+    python notes/scripts/make_sim_study_figures.py --from-csv notes/figures/sim_metrics.csv
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from scipy.interpolate import RegularGridInterpolator
 
 from datasets import simulate_ls2, true_psd_ls2, wdm_white_noise_calibration
@@ -101,6 +106,11 @@ def _metrics(res, cal, log_f0_common):
 
 
 METRIC_KEYS = ("wm", "tm", "wc", "tc", "ww", "tw", "wt", "tt", "wr", "tr", "we", "te")
+# Metric-key naming: prefix selects the likelihood, suffix the quantity.
+LIKELIHOOD_PREFIX = {"w": "wdm", "t": "mp"}
+METRIC_SUFFIX = {"m": "mse", "c": "coverage", "w": "ci_width",
+                 "t": "wall_time_s", "r": "rhat", "e": "neff"}
+CSV_COLUMNS = ("n_total", "likelihood", "repeat", *METRIC_SUFFIX.values())
 
 
 def _diag_extrema(res) -> tuple[float, float]:
@@ -125,6 +135,34 @@ def _load_shards() -> tuple[np.ndarray, dict[str, list]]:
             for k in METRIC_KEYS:
                 raw[k].append(np.asarray(f[f"{k}_samples"]))
     return np.asarray(durations), raw
+
+
+def _raw_to_dataframe(durations: np.ndarray, raw: dict[str, list]) -> pd.DataFrame:
+    """Long-format table, one row per (duration, likelihood, repeat)."""
+    rows = []
+    for i, n_total in enumerate(durations):
+        for prefix, likelihood in LIKELIHOOD_PREFIX.items():
+            columns = {name: np.asarray(raw[f"{prefix}{suffix}"][i])
+                      for suffix, name in METRIC_SUFFIX.items()}
+            n_repeats = len(next(iter(columns.values())))
+            for r in range(n_repeats):
+                rows.append({"n_total": int(n_total), "likelihood": likelihood,
+                            "repeat": r, **{k: float(v[r]) for k, v in columns.items()}})
+    return pd.DataFrame(rows, columns=list(CSV_COLUMNS))
+
+
+def _dataframe_to_raw(df: pd.DataFrame) -> tuple[np.ndarray, dict[str, list]]:
+    """Inverse of :func:`_raw_to_dataframe`, for re-rendering from an edited CSV."""
+    durations = np.sort(df["n_total"].unique())
+    inv_prefix = {v: k for k, v in LIKELIHOOD_PREFIX.items()}
+    raw = {k: [] for k in METRIC_KEYS}
+    for n_total in durations:
+        sub = df[df["n_total"] == n_total]
+        for likelihood, prefix in inv_prefix.items():
+            block = sub[sub["likelihood"] == likelihood].sort_values("repeat")
+            for suffix, name in METRIC_SUFFIX.items():
+                raw[f"{prefix}{suffix}"].append(block[name].to_numpy(dtype=float))
+    return durations, raw
 
 
 def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
@@ -155,12 +193,12 @@ def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
     _band(ax_w, "ww", "tab:blue", "o-", "WDM")
     _band(ax_w, "tw", "tab:orange", "s--", "Moving periodogram")
     ax_w.set_xscale("log"); ax_w.set_yscale("log")
-    ax_w.set_ylabel(r"$90\%$ CI width on $\log S$")
+    ax_w.set_ylabel(r"$90\%$ CI width")
 
     _band(ax_t, "wt", "tab:blue", "o-", "WDM")
     _band(ax_t, "tt", "tab:orange", "s--", "Moving periodogram")
     ax_t.set_xscale("log"); ax_t.set_yscale("log")
-    ax_t.set_ylabel("Sampling wall time [s]")
+    ax_t.set_ylabel("Wall time [s]")
     ax_t.set_xlabel("Number of observations $n$")
 
     # Explicit ticks at the sampled lengths; the sub-decade span otherwise
@@ -171,6 +209,10 @@ def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
 
     fig.savefig(FIG_DIR / "sim_mse_coverage.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
+
+    csv_path = FIG_DIR / "sim_metrics.csv"
+    _raw_to_dataframe(durations, raw).to_csv(csv_path, index=False)
+    print(f"Wrote {csv_path}")
 
 
 def main() -> None:
@@ -183,8 +225,17 @@ def main() -> None:
                         help="Skip the single-realization triptych (for shard jobs).")
     parser.add_argument("--render-only", action="store_true",
                         help="Re-render Figure 2 from the saved shards (no refits).")
+    parser.add_argument("--from-csv", type=Path, default=None,
+                        help="Re-render Figure 2 from a (possibly hand-edited) "
+                             "sim_metrics.csv instead of the npz shards.")
     args = parser.parse_args()
     FIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.from_csv is not None:
+        durations, raw = _dataframe_to_raw(pd.read_csv(args.from_csv))
+        _render_metrics(durations, raw)
+        print(f"Fig 2 re-rendered from {args.from_csv}")
+        return
 
     if args.render_only:
         durations, raw = _load_shards()

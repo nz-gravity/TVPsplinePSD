@@ -16,7 +16,6 @@ module load gcc/13.3.0 python/3.12.3
 source /fred/oz303/avajpeyi/codes/TVPsplinePSD/.venv/bin/activate
 
 set -euo pipefail
-source "${VENV:-$PWD/.venv-ozstar}/bin/activate"
 
 export JAX_PLATFORMS=cpu
 # --nt with no values: fit nothing, make Fig 1, render Fig 2 from shards.

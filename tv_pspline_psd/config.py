@@ -47,3 +47,10 @@ class PSplineConfig:
     adaptive_time_knots: bool = True
     adaptive_time_knot_smoothing: float = 1.0
     adaptive_time_knot_floor: float = 0.25
+
+    # Parameterization of the eigen-coefficients. The non-centered (whitened)
+    # default suits weak-data problems. On large grids the likelihood pins the
+    # coefficients, so in non-centered form any move of phi must rescale every
+    # coefficient coherently -- phi freezes (n_eff ~ 1, saturated tree depth).
+    # The centered form samples the coefficients directly and decouples phi.
+    centered: bool = False

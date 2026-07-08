@@ -1,3 +1,5 @@
+*.json
+
 *.h5
 *.png
 # Python-generated files
