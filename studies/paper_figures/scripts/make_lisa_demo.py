@@ -18,15 +18,15 @@ We run, on the same data:
   * the moving-STFT (R=2, phase-retaining) blocked-Gibbs joint fit, and
   * a stationary Whittle baseline (the traditional time-invariant LISA model).
 
-Figures written to ``notes/figures/``:
+Figures written to ``studies/paper_figures/figures/``:
   lisa_surface_comparison.png, lisa_gibbs_psd_bias.png,
   lisa_representation_comparison.png
 and the intermediate arrays are cached to ``studies/results/lisa/lisa_demo.npz``.
 
 Needs the [lisa] extra.
 
-    uv run python notes/scripts/make_lisa_demo.py            # full annual run
-    uv run python notes/scripts/make_lisa_demo.py --quick    # fast smoke test
+    uv run python studies/paper_figures/scripts/make_lisa_demo.py            # full annual run
+    uv run python studies/paper_figures/scripts/make_lisa_demo.py --quick    # fast smoke test
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ from tv_pspline_psd import (
 from tv_pspline_psd.stft import moving_stft
 
 FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
-CACHE = Path(__file__).resolve().parents[2] / "studies" / "results" / "lisa" / "lisa_demo.npz"
+CACHE = Path(__file__).resolve().parents[3] / "studies" / "results" / "lisa" / "lisa_demo.npz"
 _YEAR = 365.25 * 86400.0
 
 

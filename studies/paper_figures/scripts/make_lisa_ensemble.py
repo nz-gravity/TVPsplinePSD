@@ -18,9 +18,9 @@ interruption) and rendered by ``--render-only``.
 
 Needs the [lisa] extra.
 
-    uv run python notes/scripts/make_lisa_ensemble.py            # full ensemble
-    uv run python notes/scripts/make_lisa_ensemble.py --quick    # fast smoke test
-    uv run python notes/scripts/make_lisa_ensemble.py --render-only
+    uv run python studies/paper_figures/scripts/make_lisa_ensemble.py            # full ensemble
+    uv run python studies/paper_figures/scripts/make_lisa_ensemble.py --quick    # fast smoke test
+    uv run python studies/paper_figures/scripts/make_lisa_ensemble.py --render-only
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from tv_pspline_psd import (
 )
 
 FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
-CACHE = Path(__file__).resolve().parents[2] / "studies" / "results" / "lisa" / "lisa_ensemble.npz"
+CACHE = Path(__file__).resolve().parents[3] / "studies" / "results" / "lisa" / "lisa_ensemble.npz"
 _YEAR = 365.25 * 86400.0
 _CHANNELS = ("A", "E")
 

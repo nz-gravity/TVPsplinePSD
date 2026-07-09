@@ -16,7 +16,7 @@ The scattered (u, omega) ordinates in panel (b) are produced by the genuine
 
 Produces ``representation_schematic.png`` (and a vector ``.pdf``).
 
-    python notes/scripts/make_representation_schematic.py
+    python studies/paper_figures/scripts/make_representation_schematic.py
 """
 
 from __future__ import annotations

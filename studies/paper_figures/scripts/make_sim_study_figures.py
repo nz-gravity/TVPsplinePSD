@@ -20,10 +20,10 @@ long-format ``sim_metrics.csv`` (one row per realization) next to the shards --
 edit values there and pass ``--from-csv`` to re-render Fig 2 from the edited
 file without touching the npz shards.
 
-    python notes/scripts/make_sim_study_figures.py --repeats 20
-    python notes/scripts/make_sim_study_figures.py --nt 384 --skip-fig1  # one shard
-    python notes/scripts/make_sim_study_figures.py --render-only
-    python notes/scripts/make_sim_study_figures.py --from-csv notes/figures/sim_metrics.csv
+    python studies/paper_figures/scripts/make_sim_study_figures.py --repeats 20
+    python studies/paper_figures/scripts/make_sim_study_figures.py --nt 384 --skip-fig1  # one shard
+    python studies/paper_figures/scripts/make_sim_study_figures.py --render-only
+    python studies/paper_figures/scripts/make_sim_study_figures.py --from-csv studies/paper_figures/figures/sim_metrics.csv
 """
 
 from __future__ import annotations

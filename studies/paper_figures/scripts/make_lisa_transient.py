@@ -18,10 +18,10 @@ the same data: once with the **stationary frequency-domain Whittle** noise model
 maximum the stationary analysis is overconfident -- a tight posterior displaced
 from the truth -- while the time-varying analysis is calibrated and contains it.
 
-Saves ``notes/figures/lisa_transient_corner.png`` and prints the 90% coverage of
+Saves ``studies/paper_figures/figures/lisa_transient_corner.png`` and prints the 90% coverage of
 each model over many realizations.
 
-    uv run python notes/scripts/make_lisa_transient.py
+    uv run python studies/paper_figures/scripts/make_lisa_transient.py
 """
 
 from __future__ import annotations
