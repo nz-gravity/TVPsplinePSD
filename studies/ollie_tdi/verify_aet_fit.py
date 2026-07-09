@@ -117,16 +117,13 @@ def main() -> None:
     for f0, c in ((0.06, "tab:blue"), (0.12, "tab:orange")):
         win = (fg > f0 - 0.004) & (fg < f0 + 0.004)
         fw = fg[win]
-        fnull = np.empty(tg_days.size)
-        for i in range(tg_days.size):
-            j = int(np.argmin(np.log(S_est[i, win])))
-            if 0 < j < fw.size - 1:
-                y0, y1, y2 = np.log(S_est[i, win][j - 1:j + 2])
-                denom = y0 - 2 * y1 + y2
-                off = 0.5 * (y0 - y2) / denom if abs(denom) > 0 else 0.0
-                fnull[i] = fw[j] + off * (fw[1] - fw[0])
-            else:
-                fnull[i] = fw[j]
+        # Depth-weighted centroid of the valley: each null is a cluster of
+        # micro-minima, so an argmin hops discretely between them while the
+        # centroid moves continuously with the whole valley.
+        logS_win = np.log(S_est[:, win])
+        depth = np.maximum(0.0, np.percentile(logS_win, 75, axis=1,
+                                              keepdims=True) - logS_win)
+        fnull = (fw * depth).sum(axis=1) / depth.sum(axis=1)
         pred = fnull.mean() * lam_g.mean() / lam_g
         r = np.corrcoef(fnull, pred)[0, 1]
         ax.plot(tg_days, 1e6 * (fnull - fnull.mean()), color=c,

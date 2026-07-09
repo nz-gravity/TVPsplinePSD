@@ -44,6 +44,7 @@ from tv_pspline_psd import (
     summarize_mcmc_diagnostics,
     wdm_analysis_coefficients,
 )
+from tv_pspline_psd.splines import evaluate_bspline_basis
 from datasets import wdm_white_noise_calibration
 
 set_paper_style()
@@ -241,7 +242,8 @@ def main() -> None:
         # dropping the corrupted rows: the knots still span the gaps and the
         # posterior widens there.
         keep = good_time_bins(time_grid, t_obs_s, gaps, nt)
-        tg_full_days = time_grid * t_obs_s / 86400  # for the raw-power panel
+        time_grid_all = time_grid  # full grid, for plotting across the gaps
+        tg_full_days = time_grid_all * t_obs_s / 86400
         coeffs, time_grid = coeffs[keep], time_grid[keep]
         print(f"[gaps] dropped {np.count_nonzero(~keep)} of {keep.size} time bins")
     print(f"[wdm] grid {coeffs.shape[0]} x {coeffs.shape[1]}, "
@@ -289,22 +291,32 @@ def main() -> None:
                              sharey=True)
     raw_pow = np.log(res["power"] + 1e-300) + np.log(to_psd)
     if gaps:
-        # Show the masked bins as holes rather than letting pcolormesh
-        # stretch neighbours across them; the posterior panel keeps the
-        # bridged surface, with the gaps marked.
+        # Raw panel: masked bins as holes rather than letting pcolormesh
+        # stretch neighbours across them. Posterior panel: the surface is
+        # defined inside the gaps, so evaluate the spline on the full grid.
         raw_full = np.full((keep.size, raw_pow.shape[1]), np.nan)
         raw_full[keep] = raw_pow
         mesh0 = axes[0].pcolormesh(tg_full_days, fg, raw_full.T, shading="auto",
                                    cmap="viridis")
+        # Evaluate only inside the kept-bin range: outside it the spline
+        # extrapolates without data support.
+        in_support = (time_grid_all >= time_grid.min()) & (time_grid_all <= time_grid.max())
+        B_t_full = evaluate_bspline_basis(
+            time_grid_all[in_support], res["knots_time"], degree=config.degree_time)
+        logS_full = (B_t_full @ res["W_mean"] @ res["B_freq"].T) + np.log(to_psd)
+        axes[1].pcolormesh(tg_full_days[in_support], fg, logS_full.T,
+                           shading="auto", cmap="viridis",
+                           vmin=mesh0.get_clim()[0], vmax=mesh0.get_clim()[1])
+        for t0_g, t1_g in gaps:
+            axes[1].axvspan(t0_g / 86400, t1_g / 86400, color="white", alpha=0.2,
+                            lw=0)
     else:
         mesh0 = axes[0].pcolormesh(tg_days, fg, raw_pow.T, shading="auto",
                                    cmap="viridis")
+        axes[1].pcolormesh(tg_days, fg, np.log(S_est).T, shading="auto",
+                           cmap="viridis", vmin=mesh0.get_clim()[0],
+                           vmax=mesh0.get_clim()[1])
     axes[0].set_title("raw WDM log power")
-    axes[1].pcolormesh(tg_days, fg, np.log(S_est).T, shading="auto", cmap="viridis",
-                       vmin=mesh0.get_clim()[0], vmax=mesh0.get_clim()[1])
-    for t0_g, t1_g in gaps:
-        axes[1].axvspan(t0_g / 86400, t1_g / 86400, facecolor="none",
-                        edgecolor="white", hatch="//", lw=0.0)
     axes[1].set_title(r"posterior mean $\log \hat S(t,f)$")
     for ax in axes:
         ax.set_yscale("log")
