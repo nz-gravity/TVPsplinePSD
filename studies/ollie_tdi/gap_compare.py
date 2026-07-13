@@ -188,26 +188,42 @@ def main() -> None:
     rel = 1 / np.sqrt(7 * np.count_nonzero(jc))  # 7 welch segments per chunk
 
     ax = axes[1]
-    Sg = S_tv[:, group].mean(axis=1)
-    med = np.median(Sg)
-    ax.fill_between(tg_days, S_lo[:, group].mean(axis=1) / med,
-                    S_hi[:, group].mean(axis=1) / med, color="tab:blue",
-                    alpha=0.25, lw=0)
-    ax.plot(tg_days, Sg / med, color="tab:blue", lw=1.2,
-            label=r"TV fit $\hat S(t,f_\star)$")
+    med = None
+    for tag in fits:
+        Sg_t = (fits[tag]["psd_mean"] * cal[None, :] / (2.0 * dt))[:, group].mean(axis=1)
+        lo_t = (fits[tag]["psd_lower"] * cal[None, :] / (2.0 * dt))[:, group].mean(axis=1)
+        hi_t = (fits[tag]["psd_upper"] * cal[None, :] / (2.0 * dt))[:, group].mean(axis=1)
+        if med is None:  # common normalisation: the ungapped time median
+            med = np.median(Sg_t)
+        tgt = fits[tag]["time_grid_days"]
+        ax.fill_between(tgt, lo_t / med, hi_t / med, alpha=0.2, lw=0,
+                        **STYLES[tag])
+        ax.plot(tgt, Sg_t / med, lw=1.1, **STYLES[tag], label=tag)
     ax.errorbar(t_c, pc / np.median(pc), yerr=rel * pc / np.median(pc),
                 fmt="o", ms=3, mfc="none", color="0.25", lw=0.9,
                 label="chunked Welch (3 d)")
+    # Arm-length prediction of the power trajectory: shift the raw full-run
+    # Welch spectrum by the recorded arm breathing, S(t, f) = W(f Lbar(t)/L0),
+    # no free parameters (cf. verify_aet_fit).
+    W_f, W_S = fits["ungapped"]["welch_f"], fits["ungapped"]["welch_psd"]
+    lam_c = np.interp(t_c, t_L, L_bar / L_bar[0])
+    pred = np.exp(np.mean([np.interp(np.log(fg_u[j] * lam_c), np.log(W_f[1:]),
+                                     np.log(W_S[1:])) for j in group], axis=0))
+    ax.plot(t_c, pred / np.median(pred), "--", color="black", lw=0.9,
+            label="arm-length prediction")
+    Sg = S_tv[:, group].mean(axis=1)
     ax.axhline(Sg.mean() / med, color="tab:red", ls="--", lw=1.2,
                label="stationary PSD")
     r = np.corrcoef(np.log(pc), np.log(np.interp(t_c, tg_days, Sg)))[0, 1]
     print(f"[flank-trajectory] f* = {f_star*1e3:.1f} mHz: fit swing "
           f"x{Sg.max()/Sg.min():.2f}, welch swing x{pc.max()/pc.min():.2f}, "
-          f"corr(log welch, log fit) = {r:+.3f}")
+          f"corr(log welch, log fit) = {r:+.3f}, "
+          f"corr(log welch, log pred) = "
+          f"{np.corrcoef(np.log(pc), np.log(pred))[0, 1]:+.3f}")
     ax.set_xlabel("time [days]")
     ax.set_ylabel(r"$S(t,f_\star)\,/\,\mathrm{med}_t\,\hat S$")
-    ax.legend(fontsize=6.5, title=f"$f_\\star = {f_star*1e3:.1f}$ mHz",
-              title_fontsize=6.5)
+    ax.legend(fontsize=6, title=f"$f_\\star = {f_star*1e3:.1f}$ mHz",
+              title_fontsize=6)
 
     # Null tracks with 90% credible bands (per-posterior-draw centroids,
     # saved by fit_aet_fullband). The two nulls are labelled in-plot; the
@@ -235,7 +251,7 @@ def main() -> None:
     for tag in fits:
         ax.plot([], [], "-", label=tag, **STYLES[tag])
     ax.plot([], [], "-", color="black", lw=0.8, alpha=0.6,
-            label=r"$\propto 1/\bar L(t)$")
+            label="arm-length prediction")
     for t0, t1 in gaps_s:
         ax.axvspan(t0 / 86400, t1 / 86400, color="0.85", lw=0)
     ax.set_xlabel("time [days]")

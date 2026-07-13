@@ -12,8 +12,7 @@ from ._wdm import (
     trimmed_keep_indices,
     wdm_white_noise_calibration,
 )
-from .galactic_binary import gb_quadratures, gb_signal
-from .lisa import (
+from .lisa_tdi import (
     LISANoiseConfig,
     digman_cornish_power_modulation,
     galactic_modulation,
@@ -22,23 +21,16 @@ from .lisa import (
     normalization_constant,
     simulate_tv_lisa_noise,
     true_psd_lisa,
-)
-from .lisa_tdi import (
-    gb_tdi_signal,
+        gb_tdi_signal,
     lisa_tdi_confusion_psd,
     lisa_tdi_noise_psd,
     optimal_snr,
     simulate_tv_lisa_tdi,
     true_tv_lisa_tdi_psd,
 )
+
 from .ls2 import simulate_ls2, true_psd_ls2
-from .sobh import (
-    SOBHParams,
-    lisa_lw_antenna,
-    sobh_optimal_snr,
-    sobh_strain_fd,
-    sobh_strain_td,
-)
+
 
 __all__ = [
     "simulate_ls2",
