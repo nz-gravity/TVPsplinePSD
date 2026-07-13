@@ -16,6 +16,7 @@ dependencies = [
     "arviz-stats>=1.2.0",
     "arviz-plots>=1.2.0",
     "h5py>=3.16.0",
+    "h5netcdf>=1.6.1",
     "mojito-processor>=0.6.3",
 ]
 

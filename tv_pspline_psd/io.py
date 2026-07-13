@@ -111,7 +111,9 @@ def save_run(
     """Save a fit to a single NetCDF file and return the path."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    results_to_idata(results, true_psd=true_psd).to_netcdf(path)
+    # DataTree-backed InferenceData requires NetCDF4.  Pin the backend so saving
+    # does not depend on xarray's optional-engine discovery order.
+    results_to_idata(results, true_psd=true_psd).to_netcdf(path, engine="h5netcdf")
     return path
 
 

@@ -122,36 +122,42 @@ def main() -> None:
 
     ax = axes[1]
     nf = fits["ungapped"]["freq_grid"].size
+    ax.axhspan(*(1 + 3 * np.sqrt(2 / nf) * np.array([-1, 1])), color="0.92",
+               lw=0, label=r"$3\sigma$ $\chi^2$ band")
     for tag, fit in fits.items():
-        ax.plot(fit["time_grid_days"], z2_t[tag], lw=1.0, **STYLES[tag],
-                label=tag)
+        ax.plot(fit["time_grid_days"], z2_t[tag], ".", ms=3, alpha=0.8,
+                **STYLES[tag], label=tag)
     ax.axhline(1.0, color="black", ls=":", lw=0.7)
-    for b in 1 + 3 * np.sqrt(2 / nf) * np.array([-1, 1]):
-        ax.axhline(b, color="0.6", ls=":", lw=0.7)
     for t0, t1 in gaps_s:
-        ax.axvspan(t0 / 86400, t1 / 86400, color="0.85", lw=0)
+        ax.axvspan(t0 / 86400, t1 / 86400, color="0.8", alpha=0.5, lw=0)
+    ax.legend(fontsize=6.5, loc="upper right")
     ax.set_xlabel("time [days]")
     ax.set_ylabel(r"$\overline{z^2}$ per time bin")
 
+    # Flank asymmetry: A(t) = zbar^2(low side) - zbar^2(high side), each side
+    # normalised by its time mean. The drifting nulls give the stationary
+    # model an odd (opposite-signed) miscalibration across each null, so A(t)
+    # ramps through zero for the stationary spectrum and stays flat for the
+    # TV fit; band-pooled statistics cancel this signature entirely.
     ax = axes[2]
     tg_days = fits["ungapped"]["time_grid_days"]
     n_flank = flanks["left"].sum()
     block = 8  # ~2-day block means: 120 bins x 5.6 h over the month
     nblk = tg_days.size // block
     blk = lambda y: y[: nblk * block].reshape(nblk, block).mean(axis=1)
+    ax.axhspan(*(2 / np.sqrt(n_flank * block) * 3 * np.array([-1, 1])),
+               color="0.92", lw=0, label=r"$3\sigma$ $\chi^2$ band")
     for model, color in (("TV", "tab:blue"), ("stationary", "tab:red")):
-        for side, ls, mk in (("left", "-", "o"), ("right", "--", "s")):
-            y = z2_flank[model][side]
-            ax.plot(blk(tg_days), blk(y / y.mean()), ls, marker=mk, ms=2.5,
-                    color=color, lw=1.0, label=f"{model}, {side} flank")
-            trend = np.polyfit(tg_days, y / y.mean(), 1)[0] * (tg_days[-1] - tg_days[0])
-            print(f"[stationary-compare] {model} {side}: mean z^2 = "
-                  f"{y.mean():.3f}, trend over record = {trend:+.3f}")
-    ax.axhline(1.0, color="black", ls=":", lw=0.7)
-    for b in 1 + 3 * np.sqrt(2 / (n_flank * block)) * np.array([-1, 1]):
-        ax.axhline(b, color="0.6", ls=":", lw=0.7)
+        yl, yr = (z2_flank[model][s] for s in ("left", "right"))
+        a = yl / yl.mean() - yr / yr.mean()
+        ax.plot(blk(tg_days), blk(a), "o-", color=color, ms=2.5, lw=1.0,
+                label=f"{model} PSD")
+        print(f"[stationary-compare] {model}: asymmetry range "
+              f"{a.min():+.3f} to {a.max():+.3f} "
+              f"(left mean z^2 {yl.mean():.3f}, right {yr.mean():.3f})")
+    ax.axhline(0.0, color="black", ls=":", lw=0.7)
     ax.set_xlabel("time [days]")
-    ax.set_ylabel(r"flank $\overline{z^2}$ / time mean")
+    ax.set_ylabel(r"flank $\overline{z^2}$ asymmetry")
     ax.legend(fontsize=6.5)
 
     ax = axes[3]
