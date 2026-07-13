@@ -5,7 +5,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from datasets import true_psd_ls2, wdm_white_noise_calibration
 from tv_pspline_psd import (
     evaluate_dense_posterior_mean,
     mse_log_psd,
@@ -14,6 +13,9 @@ from tv_pspline_psd import (
     save_figure,
     stft_white_noise_calibration,
 )
+from tv_pspline_psd.datasets import true_psd_ls2, wdm_white_noise_calibration
+
+
 def _save_psd_plot(
     results: dict[str, object],
     calibration: np.ndarray,

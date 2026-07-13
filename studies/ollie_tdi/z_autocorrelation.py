@@ -15,14 +15,19 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
+from fit_aet_fullband import (
+    DECIMATE,
+    GRID,
+    N_KNOTS_LIN,
+    N_KNOTS_LOG,
+    RESULTS_DIR,
+    TRIM_TIME_BINS,
+    fft_decimate,
+    load_aet,
+)
 
 from tv_pspline_psd import PSplineConfig, set_paper_style, wdm_analysis_coefficients
-from datasets import wdm_white_noise_calibration
-
-from fit_aet_fullband import (
-    DECIMATE, GRID, N_KNOTS_LIN, N_KNOTS_LOG, RESULTS_DIR, TRIM_TIME_BINS,
-    fft_decimate, load_aet,
-)
+from tv_pspline_psd.datasets import wdm_white_noise_calibration
 
 set_paper_style()
 

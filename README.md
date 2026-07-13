@@ -28,11 +28,11 @@ from the WDM transform, while `run_stft_mcmc` uses the real and imaginary parts
 of a short-time Fourier coefficient via the moving periodogram. Both front ends
 share the same core surface fitter.
 
-The prior is sampled in a non-centered form using standard-normal coefficients
-in the penalty eigenbasis, rescaled by
-`1 / sqrt(phi_t lambda_t + phi_f lambda_f)`. That removes the usual smoothing
-funnel and materially improves NUTS behavior. The smoothing precisions are
-sampled on the log scale with a `Gamma` hyperprior.
+The prior supports both non-centered standard-normal coefficients rescaled by
+`1 / sqrt(phi_t lambda_t + phi_f lambda_f)` and centered eigen-coefficients.
+Small or weak-data problems generally suit the non-centered form; large grids
+where the likelihood pins the surface generally require `centered=True`. The
+smoothing precisions are sampled on the log scale with a `Gamma` hyperprior.
 
 ## Install
 
@@ -47,7 +47,7 @@ uv sync --group dev
 ```
 
 The package must be installed before running the examples or studies because
-they import `tv_pspline_psd` and `datasets` directly.
+they import `tv_pspline_psd` directly.
 
 Optional LISA extras are available with:
 
@@ -55,17 +55,27 @@ Optional LISA extras are available with:
 uv pip install -e .[lisa]
 ```
 
+The Mojito study dependency is isolated in the studies extra:
+
+```bash
+uv sync --extra studies
+```
+
 ## Quickstart
 
 ```python
 import numpy as np
-from datasets import simulate_ls2
+from tv_pspline_psd.datasets import simulate_ls2
 from tv_pspline_psd import PSplineConfig, run_wdm_psd_mcmc
 
 data = simulate_ls2(576, rng=np.random.default_rng(0))
 results = run_wdm_psd_mcmc(data, dt=0.1, nt=24, config=PSplineConfig())
-psd_surface = results["psd_mean"]
+psd_surface = results["psd_geometric_mean"]
 ```
+
+Surface point estimates are posterior geometric means,
+`exp(E[log S])`. The legacy `psd_mean` key remains as a deprecated alias for
+one release.
 
 For a fuller example with diagnostics and a saved figure:
 
@@ -78,7 +88,7 @@ uv run python examples/quickstart.py
 | Path | Role |
 |------|------|
 | `tv_pspline_psd/` | Estimator package: splines, priors, inference, diagnostics, metrics, plotting |
-| `datasets/` | Synthetic datasets and references, separate from inference code |
+| `tv_pspline_psd/datasets/` | Synthetic datasets and references |
 | `examples/` | Minimal runnable examples |
 | `studies/` | Reproducible simulation studies for LS2 and LISA use cases |
 | `notes/` | Manuscript source, bibliography, figure scripts, and generated figures |
@@ -86,4 +96,3 @@ uv run python examples/quickstart.py
 Data generation is intentionally separate from estimation: dataset modules
 return raw time series and analytic or Monte Carlo references without depending
 on the spline machinery.
-

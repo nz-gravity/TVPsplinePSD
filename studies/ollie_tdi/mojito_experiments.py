@@ -30,9 +30,11 @@ import json
 import time
 from pathlib import Path
 
-import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+from check_XYZ import DATA, DT
+from fit_mojito_segment import band_trims, load_segment
+from null_zoom import predicted_null
 from scipy.signal import welch
 from scipy.stats import kstest
 
@@ -42,47 +44,38 @@ from tv_pspline_psd import (
     set_paper_style,
     summarize_mcmc_diagnostics,
 )
-from datasets import wdm_white_noise_calibration
-
-from check_XYZ import DATA, DT, orthogonal_aet
-from fit_mojito_segment import band_trims
-from null_zoom import predicted_null
+from tv_pspline_psd.datasets import wdm_white_noise_calibration
 
 set_paper_style()
 
 REPO = Path(__file__).resolve().parents[2]
 EXP_DIR = REPO / "studies" / "results" / "ollie_tdi" / "experiments"
 
-# name -> (days | None for full, nt, time_knots, warmup, samples, chains)
+# Finite experiment windows are nested just past the leading taper.  The full
+# cross-validation fold starts at the estimated 18-day taper boundary so two
+# equal, disjoint 348-day windows fit inside the 716-day series.
+START_DAY = 20.0
+FULL_CV_START_DAY = 18.0
+FULL_CV_DAYS = 348.0
+
+# Each ``cv`` value is ``((train_start_day, train_days),
+# (test_start_day, test_days))``.
 EXPERIMENTS: dict[str, dict] = {
-    "1_week":  dict(days=7.0,   nt=32,  time_knots=8,  warmup=300, samples=300, chains=2),
-    "1_month": dict(days=30.0,  nt=30,  time_knots=10, warmup=300, samples=300, chains=2),
-    "6_month": dict(days=182.0, nt=180, time_knots=16, warmup=150, samples=150, chains=1),
-    "1_year":  dict(days=365.0, nt=360, time_knots=24, warmup=120, samples=120, chains=1),
-    "1.5_year": dict(days=548.0, nt=548, time_knots=30, warmup=120, samples=120, chains=1),
-    "full":    dict(days=None,  nt=700, time_knots=36, warmup=120, samples=120, chains=1),
+    "1_week": dict(days=7.0, nt=32, time_knots=8, warmup=300, samples=300,
+                   chains=2, cv=((START_DAY, 7.0), (START_DAY + 7.0, 7.0))),
+    "1_month": dict(days=30.0, nt=30, time_knots=10, warmup=300, samples=300,
+                    chains=2, cv=((START_DAY, 30.0), (START_DAY + 30.0, 30.0))),
+    "6_month": dict(days=182.0, nt=180, time_knots=16, warmup=150, samples=150,
+                    chains=1, cv=((START_DAY, 182.0), (START_DAY + 182.0, 182.0))),
+    "1_year": dict(days=365.0, nt=360, time_knots=24, warmup=120, samples=120,
+                   chains=1, cv=((START_DAY, 365.0), (START_DAY + 365.0, 365.0))),
+    "1.5_year": dict(days=548.0, nt=548, time_knots=30, warmup=120, samples=120,
+                     chains=1, cv=((START_DAY, 548.0), (START_DAY + 548.0, 548.0))),
+    "full": dict(days=None, nt=700, time_knots=36, warmup=120, samples=120,
+                 chains=1,
+                 cv=((FULL_CV_START_DAY, FULL_CV_DAYS),
+                     (FULL_CV_START_DAY + FULL_CV_DAYS, FULL_CV_DAYS))),
 }
-START_DAY = 20.0  # finite windows start just past the leading taper (nested)
-
-
-def load_segment(channel: str, nt: int, start_day: float, days: float | None):
-    """Load one channel window, WDM-valid length. ``days=None`` -> full series."""
-    with h5py.File(DATA, "r") as h:
-        grp = h["processed/segment0"]
-        n_full = grp["X"].shape[0]
-        t_full = n_full * DT / 86400.0
-        if days is None:
-            s0, span = 0.0, t_full
-        else:
-            s0, span = min(max(0.0, start_day), t_full), days
-        i0 = int(round(s0 * 86400.0 / DT))
-        nf = int(round(span * 86400.0 / DT)) // nt
-        nf -= nf % 2
-        n_use = nt * nf
-        cols = ("X", "Y", "Z")
-        xyz = {c: grp[c][i0 : i0 + n_use] for c in cols}
-    series = xyz[channel] if channel in xyz else orthogonal_aet(xyz)[channel]
-    return series, i0 * DT / 86400.0
 
 
 def plot_spectrum(fg, S_est, S_lo, S_hi, wf, wp, band, out, title):
@@ -210,6 +203,14 @@ def run_experiment(name: str, channel: str, fmin: float, fmax: float) -> dict:
     # Calibrate to 1/Hz for the spectrum (few draws suffice on big grids).
     n_draws = int(np.clip(6_000_000 // max(1, n_total // 100), 24, 200))
     cal = wdm_white_noise_calibration(n_total, DT, nt, config, n_draws=n_draws)
+    res["provenance"].update({
+        "calibration": {"n_draws": n_draws, "seed": 0},
+        "source_data": {
+            "path": str(DATA),
+            "shape": [int(n_total)],
+            "channel": channel,
+        },
+    })
     to_psd = 2.0 * DT / cal[None, :]
     S_est, S_lo, S_hi = (res[k] * to_psd for k in ("psd_mean", "psd_lower", "psd_upper"))
     wf, wp = welch(series, fs=1.0 / DT, nperseg=min(n_total, 2**16))
@@ -232,7 +233,12 @@ def run_experiment(name: str, channel: str, fmin: float, fmax: float) -> dict:
                    rhat_phi_time=diag["phi_time"]["r_hat"], rhat_phi_freq=diag["phi_freq"]["r_hat"],
                    **stats)
     with open(outdir / "diag.json", "w") as fp:
-        json.dump({**summary, "full_diag": diag}, fp, indent=2, default=float)
+        json.dump(
+            {**summary, "provenance": res["provenance"], "full_diag": diag},
+            fp,
+            indent=2,
+            default=float,
+        )
     print(f"[{name}] mean(z^2)={stats['mean_z2']:.3f} KS={stats['ks_stat']:.3f} -> {outdir}")
     return summary
 

@@ -1,9 +1,10 @@
 """WDM tensor-product log-P-spline estimator for non-stationary noise PSDs.
 
 The estimator fits a smooth ``log S(t, f)`` surface to squared WDM coefficients
-with a WDM Whittle likelihood (``w_nm ~ N(0, S_nm)``) and a non-centered
-(whitened) anisotropic P-spline prior. See :mod:`tv_pspline_psd.model` for the prior
-construction and :func:`tv_pspline_psd.run_wdm_psd_mcmc` for the entry point.
+with a WDM Whittle likelihood (``w_nm ~ N(0, S_nm)``) and a centered or
+non-centered anisotropic P-spline prior in a whitened eigenbasis. See
+:mod:`tv_pspline_psd.model` for the prior construction and
+:func:`tv_pspline_psd.run_wdm_psd_mcmc` for the entry point.
 """
 
 from __future__ import annotations
@@ -23,24 +24,25 @@ from .inference import (  # noqa: E402
     run_wdm_psd_mcmc,
     wdm_analysis_coefficients,
 )
+from .io import (  # noqa: E402
+    load_run,
+    results_to_idata,
+    save_run,
+    surface_from_idata,
+)
 from .joint import (  # noqa: E402
     run_gibbs_signal_noise_mcmc,
-    run_gibbs_stft_signal_noise_mcmc,
-    run_joint_signal_noise_mcmc,
-    run_joint_dL_wdm_mcmc,
-    run_joint_sobh_wdm_mcmc,
     run_multichannel_joint_mcmc,
 )
-from .sobh_signal import (  # noqa: E402
-    build_sobh_wdm_grid,
-    make_sobh_wdm_signal_fn,
+from .metrics import (  # noqa: E402
+    interval_coverage,
+    mse_log_psd,
+    relative_surface_error,
 )
 from .moving_periodogram import (  # noqa: E402
     run_tang_dynamic_whittle_mcmc,
     tang_moving_periodogram,
 )
-from .stationary import run_stationary_psd_mcmc  # noqa: E402
-from .metrics import interval_coverage, mse_log_psd, relative_surface_error  # noqa: E402
 from .plotting import (  # noqa: E402
     plot_channel_slice,
     plot_surface_comparison,
@@ -48,26 +50,16 @@ from .plotting import (  # noqa: E402
     save_figure,
     set_paper_style,
 )
+from .provenance import provenance  # noqa: E402
+from .stationary import run_stationary_psd_mcmc  # noqa: E402
 from .stft import moving_stft, run_stft_mcmc, stft_white_noise_calibration  # noqa: E402
-from .io import (  # noqa: E402
-    load_run,
-    results_to_idata,
-    save_run,
-    surface_from_idata,
-)
 
 __all__ = [
     "PSplineConfig",
     "fit_log_pspline_surface",
     "wdm_analysis_coefficients",
     "run_wdm_psd_mcmc",
-    "run_joint_signal_noise_mcmc",
-    "run_joint_sobh_wdm_mcmc",
-    "run_joint_dL_wdm_mcmc",
-    "build_sobh_wdm_grid",
-    "make_sobh_wdm_signal_fn",
     "run_gibbs_signal_noise_mcmc",
-    "run_gibbs_stft_signal_noise_mcmc",
     "run_multichannel_joint_mcmc",
     "run_tang_dynamic_whittle_mcmc",
     "tang_moving_periodogram",
@@ -80,6 +72,7 @@ __all__ = [
     "load_run",
     "results_to_idata",
     "surface_from_idata",
+    "provenance",
     "summarize_mcmc_diagnostics",
     "relative_surface_error",
     "mse_log_psd",

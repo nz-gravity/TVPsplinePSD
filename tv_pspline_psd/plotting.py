@@ -8,6 +8,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 
+from .model import power_floor
+
 
 def set_paper_style() -> None:
     """Apply a publication style matching the PRD/ApJ reference figures.
@@ -109,7 +111,8 @@ def quicklook(idata, *, path: str | Path | None = None) -> plt.Figure | Path:
         surf["time_grid"], surf["freq_grid"], surf["log_psd_mean"].T, shading="auto"
     )
     axes[col].set_title("posterior-mean log PSD")
-    axes[col].set_xlabel("time"); axes[col].set_ylabel("frequency")
+    axes[col].set_xlabel("time")
+    axes[col].set_ylabel("frequency")
     fig.colorbar(mesh, ax=axes[col], fraction=0.046)
 
     attrs = idata.attrs
@@ -140,9 +143,11 @@ def plot_surface_comparison(
     time_grid = np.asarray(results["time_grid"])
     freq_grid = np.asarray(results["freq_grid"]) * freq_scale
 
-    raw = np.log(np.asarray(results["power"]) + 1e-12)
-    post = np.log(np.asarray(results["psd_mean"]) + 1e-12)
-    ref = np.log(np.asarray(reference_psd) + 1e-12)
+    raw_power = np.asarray(results["power"])
+    floor = power_floor(raw_power)
+    raw = np.log(raw_power + floor)
+    post = np.log(np.asarray(results["psd_mean"]) + floor)
+    ref = np.log(np.asarray(reference_psd) + floor)
     vmin = min(raw.min(), post.min(), ref.min())
     vmax = max(raw.max(), post.max(), ref.max())
 

@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 
-from datasets import monte_carlo_reference, simulate_ls2
 from tv_pspline_psd import (
     PSplineConfig,
     plot_surface_comparison,
@@ -14,6 +13,7 @@ from tv_pspline_psd import (
     run_wdm_psd_mcmc,
     summarize_mcmc_diagnostics,
 )
+from tv_pspline_psd.datasets import monte_carlo_reference, simulate_ls2
 
 
 def main() -> None:

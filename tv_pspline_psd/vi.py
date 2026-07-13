@@ -15,7 +15,6 @@ from typing import Any, Callable
 
 import jax.numpy as jnp
 import optax
-from jax import random
 from numpyro.infer import SVI, Trace_ELBO
 from numpyro.infer.autoguide import AutoDiagonalNormal
 from numpyro.infer.util import init_to_value

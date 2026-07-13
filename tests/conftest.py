@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import numpy as np
 import os
+
+import numpy as np
 import pytest
 
-from datasets import simulate_ls2
 from tv_pspline_psd import PSplineConfig
-
+from tv_pspline_psd.datasets import simulate_ls2
 
 OUTDIR = os.path.join(os.path.dirname(__file__), "out_tests")
 

@@ -25,6 +25,7 @@ from .model import (
     whiten_penalty_pair,
     whitened_init_values,
 )
+from .provenance import provenance
 from .splines import (
     create_adaptive_time_knots,
     create_bspline_basis,
@@ -73,8 +74,25 @@ def fit_log_pspline_surface(
         ``nuts_runtime_s`` and (when ``use_vi``) ``vi_runtime_s`` wall-clock times.
     """
     coeffs = np.asarray(coeffs, dtype=float)
+    time_grid = np.asarray(time_grid, dtype=float)
+    freq_grid = np.asarray(freq_grid, dtype=float)
     if coeffs.ndim != 3:
         raise ValueError("coeffs must have shape (R, n_time, n_freq).")
+    if coeffs.shape[0] == 0 or coeffs.shape[1] == 0 or coeffs.shape[2] == 0:
+        raise ValueError("coeffs and the analysis grid must be non-empty after trimming.")
+    if time_grid.ndim != 1 or freq_grid.ndim != 1:
+        raise ValueError("time_grid and freq_grid must be one-dimensional.")
+    if coeffs.shape[1] != time_grid.size or coeffs.shape[2] != freq_grid.size:
+        raise ValueError(
+            "coeffs shape must match time_grid and freq_grid: expected "
+            f"(*, {time_grid.size}, {freq_grid.size}), got {coeffs.shape}."
+        )
+    if not np.isfinite(coeffs).all():
+        raise ValueError("coeffs must contain only finite values.")
+    if not np.isfinite(time_grid).all() or not np.isfinite(freq_grid).all():
+        raise ValueError("time_grid and freq_grid must contain only finite values.")
+    if np.any(np.diff(time_grid) <= 0) or np.any(np.diff(freq_grid) <= 0):
+        raise ValueError("time_grid and freq_grid must be strictly increasing.")
     power = np.sum(coeffs**2, axis=0)  # summed squared components per cell
     freq_unit = freq_grid / np.maximum(freq_grid[-1], 1e-12)
 
@@ -183,6 +201,9 @@ def fit_log_pspline_surface(
         "log_psd_mean": log_mean,
         "log_psd_lower": log_lower,
         "log_psd_upper": log_upper,
+        # Geometric posterior mean exp(E[log S]); ``psd_mean`` is a deprecated
+        # compatibility alias retained for one release.
+        "psd_geometric_mean": np.exp(log_mean),
         "psd_mean": np.exp(log_mean),
         "psd_lower": np.exp(log_lower),
         "psd_upper": np.exp(log_upper),
@@ -191,7 +212,15 @@ def fit_log_pspline_surface(
         "vi_runtime_s": None if vi_runtime_s is None else float(vi_runtime_s),
         "vi_losses": None if vi_losses is None else np.asarray(vi_losses),
         "vi_log_psd": None if vi_log_psd is None else np.asarray(vi_log_psd),
+        "vi_psd_geometric_mean": (
+            None if vi_log_psd is None else np.exp(np.asarray(vi_log_psd))
+        ),
         "vi_psd_mean": None if vi_log_psd is None else np.exp(np.asarray(vi_log_psd)),
+        "provenance": provenance(
+            seed=random_seed,
+            config=config,
+            source_data={"shape": list(coeffs.shape)},
+        ),
     }
 
 
@@ -282,12 +311,32 @@ def wdm_analysis_coefficients(
     ``(n_time, n_freq)``. Using this for both the data and any signal templates
     guarantees they share the same trimmed grid.
     """
+    data = np.asarray(data)
+    if data.ndim != 1:
+        raise ValueError("WDM input data must be one-dimensional.")
+    if data.size == 0:
+        raise ValueError("WDM input data must be non-empty.")
+    if dt <= 0:
+        raise ValueError("dt must be strictly positive.")
+    if not isinstance(nt, (int, np.integer)) or isinstance(nt, (bool, np.bool_)) or nt <= 0:
+        raise ValueError("nt must be a positive integer.")
+    n_total = data.size
+    if n_total % nt != 0:
+        raise ValueError(f"WDM sizing requires N ({n_total}) to be divisible by nt ({nt}).")
+    nf = n_total // nt
+    if nt % 2 != 0 or nf % 2 != 0:
+        raise ValueError(
+            f"WDM sizing requires both nt ({nt}) and nf=N/nt ({nf}) to be even."
+        )
+
     wdm = TimeSeries(data, dt=dt).to_wdm(nt=nt)
     coeffs = _wdm_coeffs_2d(wdm)
     keep_time = np.arange(config.trim_time_bins, wdm.nt - config.trim_time_bins)
     keep_freq = np.arange(
         config.trim_low_freq_channels, wdm.nf + 1 - config.trim_high_freq_channels
     )
+    if keep_time.size == 0 or keep_freq.size == 0:
+        raise ValueError("WDM trimming leaves an empty time or frequency grid.")
     time_grid = np.asarray(wdm.time_grid)[keep_time] / wdm.duration
     freq_grid = np.asarray(wdm.freq_grid)[keep_freq]
     return coeffs[np.ix_(keep_time, keep_freq)], time_grid, freq_grid
@@ -307,6 +356,16 @@ def run_wdm_psd_mcmc(
         coeffs_fit[None, :, :], time_grid, freq_grid, config=config, **fit_kwargs
     )
     results.update({"coeffs_fit": coeffs_fit})
+    results["provenance"].update({
+        "dt": float(dt),
+        "nt": int(nt),
+        "trims": {
+            "time_bins": config.trim_time_bins,
+            "low_freq_channels": config.trim_low_freq_channels,
+            "high_freq_channels": config.trim_high_freq_channels,
+        },
+        "source_data": {"shape": list(np.asarray(data).shape)},
+    })
     return results
 
 
@@ -336,5 +395,6 @@ def evaluate_dense_posterior_mean(
         "time_grid": dense_time,
         "freq_grid": dense_freq,
         "log_psd_mean": dense_log_psd,
+        "psd_geometric_mean": np.exp(dense_log_psd),
         "psd_mean": np.exp(dense_log_psd),
     }

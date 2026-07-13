@@ -44,8 +44,9 @@ from tv_pspline_psd import (
     summarize_mcmc_diagnostics,
     wdm_analysis_coefficients,
 )
+from tv_pspline_psd.datasets import wdm_white_noise_calibration
+from tv_pspline_psd.inference import reconstruct_eig_coeff_samples
 from tv_pspline_psd.splines import evaluate_bspline_basis
-from datasets import wdm_white_noise_calibration
 
 set_paper_style()
 
@@ -276,6 +277,24 @@ def main() -> None:
 
     f_w, P_w = welch(data, fs=1 / dt, nperseg=2**18)
 
+    # Posterior of the null-track centroids: per-draw log-PSD on each null
+    # window -> depth-weighted valley centroid -> median and 90% CI. The
+    # centroid is a nonlinear functional of the surface, so its credible
+    # interval must be propagated per draw rather than read off psd_lower/upper.
+    eig_samples = reconstruct_eig_coeff_samples(
+        res["samples"], res["whitened"], config)
+    Bt_eig = res["B_time"] @ res["whitened"]["U_time"]
+    Bf_eig = res["B_freq"] @ res["whitened"]["U_freq"]
+    null_tracks = {}
+    for f0 in (0.06, 0.12):
+        win = (fg > f0 - 0.004) & (fg < f0 + 0.004)
+        logS = np.einsum("ta,nab,jb->ntj", Bt_eig, eig_samples, Bf_eig[win],
+                         optimize=True)
+        depth = np.maximum(
+            0.0, np.percentile(logS, 75, axis=2, keepdims=True) - logS)
+        fnull = (fg[win] * depth).sum(axis=2) / depth.sum(axis=2)
+        null_tracks[f0] = np.percentile(fnull, [5, 50, 95], axis=0)
+
     np.savez(
         RESULTS_DIR / f"aet_fullband_{tag}.npz",
         time_grid_days=tg_days, freq_grid=fg,
@@ -286,6 +305,7 @@ def main() -> None:
         runtime_s=total_s, nuts_runtime_s=res["nuts_runtime_s"],
         divergences=diag["divergences"],
         gaps_s=np.asarray(gaps, dtype=float).reshape(-1, 2),
+        null_track_006=null_tracks[0.06], null_track_012=null_tracks[0.12],
     )
     with open(RESULTS_DIR / f"aet_fullband_{tag}_diag.json", "w") as fp:
         json.dump(diag, fp, indent=2, default=float)

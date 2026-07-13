@@ -76,13 +76,15 @@ def monte_carlo_reference(
         config: Estimator config (for matching the trim).
         seed: PRNG seed.
     """
+    if n_draws <= 0:
+        raise ValueError("n_draws must be positive.")
     keep_time, keep_freq = trimmed_keep_indices(n_total, dt, nt, config)
     rng = np.random.default_rng(seed)
-    draws = []
+    accumulated = np.zeros((keep_time.size, keep_freq.size), dtype=float)
     for _ in range(n_draws):
         sample = simulate(rng)
         coeffs = np.asarray(TimeSeries(sample, dt=dt).to_wdm(nt=nt).coeffs)
         if coeffs.ndim == 3:
             coeffs = coeffs[0]
-        draws.append(coeffs[np.ix_(keep_time, keep_freq)] ** 2)
-    return np.mean(draws, axis=0)
+        accumulated += coeffs[np.ix_(keep_time, keep_freq)] ** 2
+    return accumulated / n_draws

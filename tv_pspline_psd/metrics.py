@@ -15,8 +15,6 @@ def relative_surface_error(reference: np.ndarray, estimate: np.ndarray) -> float
 def mse_log_psd(
     true_psd: np.ndarray,
     estimate_psd: np.ndarray,
-    *,
-    eps: float = 1e-12,
 ) -> float:
     """Mean squared error of the log-PSD over the time-frequency grid.
 
@@ -31,7 +29,11 @@ def mse_log_psd(
     estimate_psd = np.asarray(estimate_psd)
     if true_psd.shape != estimate_psd.shape:
         raise ValueError("true_psd and estimate_psd must share a grid/shape.")
-    diff = np.log(estimate_psd + eps) - np.log(true_psd + eps)
+    if not np.isfinite(true_psd).all() or not np.isfinite(estimate_psd).all():
+        raise ValueError("PSD inputs must contain only finite values.")
+    if np.any(true_psd <= 0) or np.any(estimate_psd <= 0):
+        raise ValueError("PSD inputs must be strictly positive before taking logs.")
+    diff = np.log(estimate_psd) - np.log(true_psd)
     return float(np.mean(diff**2))
 
 

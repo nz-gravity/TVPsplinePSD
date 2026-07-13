@@ -27,6 +27,7 @@ from pathlib import Path
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+from check_XYZ import DATA, DT, orthogonal_aet
 from scipy.signal import welch
 
 from tv_pspline_psd import (
@@ -35,9 +36,7 @@ from tv_pspline_psd import (
     set_paper_style,
     summarize_mcmc_diagnostics,
 )
-from datasets import wdm_white_noise_calibration
-
-from check_XYZ import DATA, DT, orthogonal_aet
+from tv_pspline_psd.datasets import wdm_white_noise_calibration
 
 set_paper_style()
 
@@ -46,27 +45,62 @@ RESULTS_DIR = REPO / "studies" / "results" / "ollie_tdi"
 
 
 def load_segment(
-    channel: str, nt: int, start_day: float, days: float
+    channel: str, nt: int, start_day: float, days: float | None
 ) -> tuple[np.ndarray, float]:
-    """Load one channel over ``[start_day, start_day + days]``, WDM-valid length.
+    """Load one channel window at an exact, WDM-valid length.
 
-    Cropped to the largest ``nt * nf`` <= window with ``nf`` even. Returns the
-    series and the actual window start in mission days.
+    Finite windows are cropped to the largest ``nt * nf`` no longer than the
+    request, with ``nf`` even.  ``days=None`` loads the full series (and ignores
+    ``start_day``).  Invalid starts and requests extending beyond the data are
+    rejected rather than silently clamped or truncated.
     """
+    if channel not in {"X", "Y", "Z", "A", "E", "T"}:
+        raise ValueError(f"unknown channel {channel!r}; expected one of XYZ/AET")
+    if nt <= 0:
+        raise ValueError("nt must be positive")
+
     with h5py.File(DATA, "r") as h:
         grp = h["processed/segment0"]
         n_full = grp["X"].shape[0]
         t_full = n_full * DT / 86400.0
-        s0 = min(max(0.0, start_day), t_full)
+        if days is None:
+            s0 = 0.0
+            n_requested = n_full
+        else:
+            if not np.isfinite(start_day) or start_day < 0.0 or start_day >= t_full:
+                raise ValueError(
+                    f"start_day={start_day!r} is outside the data span [0, {t_full:.6g})"
+                )
+            if not np.isfinite(days) or days <= 0.0:
+                raise ValueError("days must be finite and positive")
+            s0 = start_day
+            n_requested = int(round(days * 86400.0 / DT))
+
         i0 = int(round(s0 * 86400.0 / DT))
-        nf = int(round(days * 86400.0 / DT)) // nt
+        if i0 + n_requested > n_full:
+            end_day = (i0 + n_requested) * DT / 86400.0
+            raise ValueError(
+                f"requested window [{s0:.6g}, {end_day:.6g}] days extends "
+                f"past EOF at day {t_full:.6g}"
+            )
+
+        nf = n_requested // nt
         nf -= nf % 2
         if nf < 2:
             raise ValueError(f"window too short for nt={nt}; reduce --nt or widen --days")
         n_use = nt * nf
-        need = ("X", "Y", "Z") if channel in ("X", "Y", "Z") else ("X", "Y", "Z")
-        xyz = {c: grp[c][i0 : i0 + n_use] for c in need}
+        xyz = {c: grp[c][i0 : i0 + n_use] for c in ("X", "Y", "Z")}
+
+    lengths = {c: values.size for c, values in xyz.items()}
+    if any(length != n_use for length in lengths.values()):
+        raise ValueError(
+            f"HDF5 slice was truncated: requested {n_use} samples, got {lengths}"
+        )
     series = xyz[channel] if channel in xyz else orthogonal_aet(xyz)[channel]
+    if series.size != n_use:
+        raise ValueError(
+            f"derived channel {channel} has {series.size} samples; expected {n_use}"
+        )
     return series, i0 * DT / 86400.0
 
 

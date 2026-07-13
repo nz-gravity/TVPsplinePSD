@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from datasets import simulate_ls2
+from tv_pspline_psd.datasets import simulate_ls2
 
 
 def test_simulate_ls2_returns_expected_shape() -> None:

@@ -14,11 +14,10 @@ from __future__ import annotations
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+from fit_aet_fullband import DATA_FULL, DECIMATE, RESULTS_DIR, fft_decimate
 from scipy.ndimage import uniform_filter
 
 from tv_pspline_psd import PSplineConfig, set_paper_style, wdm_analysis_coefficients
-
-from fit_aet_fullband import DATA_FULL, DECIMATE, RESULTS_DIR, fft_decimate
 
 set_paper_style()
 

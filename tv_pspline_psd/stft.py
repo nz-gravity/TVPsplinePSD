@@ -33,6 +33,12 @@ def moving_stft(
         shape ``(2, n_segments, n_freq)`` holding the real and imaginary parts.
     """
     data = np.asarray(data, dtype=float)
+    if data.ndim != 1:
+        raise ValueError("STFT input data must be one-dimensional.")
+    if dt <= 0:
+        raise ValueError("dt must be strictly positive.")
+    if not isinstance(nperseg, (int, np.integer)) or nperseg <= 1:
+        raise ValueError("nperseg must be an integer greater than one.")
     n_seg = len(data) // nperseg
     if n_seg < 2:
         raise ValueError("Need at least two segments.")
@@ -78,10 +84,31 @@ def run_stft_mcmc(
     keep_freq = np.arange(
         config.trim_low_freq_channels, coeffs.shape[2] - config.trim_high_freq_channels
     )
+    if keep_freq.size == 0:
+        raise ValueError("STFT trimming leaves an empty frequency grid.")
     coeffs = coeffs[:, :, keep_freq]
     freq_grid = freq_grid[keep_freq]
+    zero_imag = [
+        int(keep_freq[j])
+        for j in range(coeffs.shape[2])
+        if np.all(coeffs[1, :, j] == 0)
+    ]
+    if zero_imag:
+        raise ValueError(
+            "STFT DC/Nyquist channels have an identically zero imaginary component "
+            f"and must be trimmed; untrimmed channel indices: {zero_imag}."
+        )
     results = fit_log_pspline_surface(
         coeffs, time_grid, freq_grid, config=config, **fit_kwargs
     )
     results.update({"nperseg": nperseg, "keep_freq": keep_freq})
+    results["provenance"].update({
+        "dt": float(dt),
+        "nperseg": int(nperseg),
+        "trims": {
+            "low_freq_channels": config.trim_low_freq_channels,
+            "high_freq_channels": config.trim_high_freq_channels,
+        },
+        "source_data": {"shape": list(np.asarray(data).shape)},
+    })
     return results

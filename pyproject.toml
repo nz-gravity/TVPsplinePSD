@@ -17,10 +17,13 @@ dependencies = [
     "arviz-plots>=1.2.0",
     "h5py>=3.16.0",
     "h5netcdf>=1.6.1",
-    "mojito-processor>=0.6.3",
 ]
 
 [project.optional-dependencies]
+studies = [
+    "mojito-processor>=0.6.3",
+]
+
 # Realistic LISA TDI signal (jaxGB) + noise (lisatools) for the global-fit demo.
 lisa = [
     "jaxgb",
@@ -34,9 +37,16 @@ lisa = [
 [tool.ruff]
 target-version = "py312"
 
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]  # Existing scientific scripts intentionally use long formulas.
+
 [tool.ruff.lint.per-file-ignores]
 # Figure-generation scripts favour compact, single-line plotting statements.
-"notes/scripts/*" = ["E402", "E702", "E731"]
+"studies/paper_figures/scripts/*" = ["E402", "E702", "E731"]
+"studies/ollie_tdi/aet_corr_summary.py" = ["E702"]
+"studies/ollie_tdi/mojito_experiments.py" = ["E702"]
+"studies/ollie_tdi/mojito_validation.py" = ["E702"]
 
 [build-system]
 requires = ["hatchling"]
@@ -45,7 +55,8 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "pytest>=8.3",
+    "ruff>=0.8",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["tv_pspline_psd", "datasets"]
+packages = ["tv_pspline_psd"]

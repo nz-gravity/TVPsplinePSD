@@ -22,14 +22,15 @@ import time
 import jax.numpy as jnp
 import numpy as np
 import numpyro
-import numpyro.distributions as dist
 from jax import random
 from numpyro.infer import MCMC, NUTS, init_to_value
 
 from .config import PSplineConfig
 from .model import (
     _sample_log_gamma,
+    eigen_prior_scale,
     power_floor,
+    sample_eigen_coefficients,
     whiten_penalty_pair,
     whitened_init_values,
 )
@@ -166,12 +167,12 @@ def _dynamic_whittle_model(mi, basis_eig_time, basis_eig_freq_unique, lam_time, 
                                  config.phi_log_base_scale)
     phi_freq = _sample_log_gamma("phi_freq", config.alpha_phi, config.beta_phi,
                                  config.phi_log_base_scale)
-    d = phi_time * lam_time[:, None] + phi_freq * lam_freq[None, :]
-    scale = jnp.where(joint_null, 1.0 / jnp.sqrt(config.null_precision),
-                      1.0 / jnp.sqrt(d + config.ridge_eps))
-    with numpyro.plate("eig_plate", n_t * n_f):
-        s_flat = numpyro.sample("s", dist.Normal(0.0, 1.0))
-    eig_coeffs = s_flat.reshape((n_t, n_f)) * scale
+    scale = eigen_prior_scale(
+        phi_time, phi_freq, lam_time, lam_freq, joint_null, config
+    )
+    eig_coeffs = sample_eigen_coefficients(
+        "s", scale, (n_t, n_f), config
+    )
     # Scattered evaluation at each ordinate's own (u_p, omega_p), grouped by
     # the m repeated frequency rungs.
     log_f = _grouped_log_surface(basis_eig_time, basis_eig_freq_unique, eig_coeffs)
@@ -205,9 +206,6 @@ def run_tang_dynamic_whittle_mcmc(
     B_freq_unique, knots_freq = create_bspline_basis(
         unique_freq_unit, config.n_interior_knots_freq, degree=config.degree_freq
     )
-    B_freq = evaluate_bspline_basis(
-        freq_unit, knots_freq, degree=config.degree_freq
-    )
     P_time = create_bspline_roughness_penalty(
         knots_time, degree=config.degree_time, derivative_order=config.diff_order_time
     )
@@ -216,7 +214,6 @@ def run_tang_dynamic_whittle_mcmc(
     )
     whitened = whiten_penalty_pair(P_time, P_freq)
     basis_eig_time = B_time @ whitened["U_time"]
-    basis_eig_freq = B_freq @ whitened["U_freq"]
     basis_eig_freq_unique = B_freq_unique @ whitened["U_freq"]
 
     pls_init = _scattered_pls_init(
@@ -252,13 +249,17 @@ def run_tang_dynamic_whittle_mcmc(
         "ta,nab,fb->ntf", BUt, eig_samples, BUf, optimize=True
     )
 
+    log_psd_mean = np.mean(log_psd_grid, axis=0)
+    psd_geometric_mean = np.exp(log_psd_mean)
     return {
         "mcmc": mcmc,
         "ordinates": ordinates,
         "time_grid": dense_u,
         "freq_grid": freq_grid_hz,
         "omega_grid": omega_grid,
-        "psd_mean": np.exp(np.mean(log_psd_grid, axis=0)),
+        "log_psd_mean": log_psd_mean,
+        "psd_geometric_mean": psd_geometric_mean,
+        "psd_mean": psd_geometric_mean,  # Deprecated compatibility alias.
         "psd_lower": np.exp(np.percentile(log_psd_grid, 5.0, axis=0)),
         "psd_upper": np.exp(np.percentile(log_psd_grid, 95.0, axis=0)),
         "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),

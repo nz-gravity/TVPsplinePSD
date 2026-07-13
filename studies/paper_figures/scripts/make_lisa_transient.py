@@ -37,9 +37,12 @@ import numpyro  # noqa: E402
 import numpyro.distributions as dist  # noqa: E402
 from numpyro.infer import MCMC, NUTS  # noqa: E402
 
-from datasets import digman_cornish_power_modulation  # noqa: E402
-from datasets.lisa_tdi import ae_tdi_confusion_psd, ae_tdi_noise_psd  # noqa: E402
 from tv_pspline_psd import save_figure, set_paper_style  # noqa: E402
+from tv_pspline_psd.datasets import digman_cornish_power_modulation  # noqa: E402
+from tv_pspline_psd.datasets.lisa_tdi import (  # noqa: E402
+    ae_tdi_confusion_psd,
+    ae_tdi_noise_psd,
+)
 
 FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
 _YEAR = 365.25 * 86400.0
@@ -140,7 +143,6 @@ def main() -> None:
     import corner
     import matplotlib.pyplot as plt
 
-    df_to_mhz = 1.0 / (NT)  # df is in cycles/observation; report Delta f0 in uHz-ish
     labels = [r"$\Delta f_0$ [bins]", r"$A/A_{\rm true}$", r"$\phi_0$ [rad]"]
     truths = [0.0, 1.0, PHI0_TRUE]
 

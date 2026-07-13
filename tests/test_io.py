@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 
 from tv_pspline_psd import (
@@ -37,12 +39,17 @@ def test_save_load_regenerates_surface(tmp_path):
     assert "diverging" in idata["sample_stats"].dataset.data_vars
     assert idata.attrs["nuts_runtime_s"] > 0
     assert "mse_nuts" in idata.attrs and "vi_mse" in idata.attrs
+    metadata = json.loads(idata.attrs["provenance"])
+    assert metadata["seed"] == 0
+    assert metadata["dt"] == 0.1
+    assert metadata["nt"] == 24
 
     # Regenerating the surface from the saved sites reproduces the fit exactly.
     surf = surface_from_idata(idata)
     np.testing.assert_allclose(surf["log_psd_mean"], res["log_psd_mean"], atol=1e-9)
     np.testing.assert_allclose(surf["log_psd_lower"], res["log_psd_lower"], atol=1e-9)
     np.testing.assert_allclose(surf["log_psd_upper"], res["log_psd_upper"], atol=1e-9)
+    np.testing.assert_allclose(surf["psd_geometric_mean"], res["psd_mean"])
 
     dense = surface_from_idata(idata, n_time_dense=40, n_freq_dense=40)
     assert dense["psd_mean"].shape == (40, 40)

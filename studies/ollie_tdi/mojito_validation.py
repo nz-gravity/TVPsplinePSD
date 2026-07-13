@@ -31,6 +31,9 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from check_XYZ import DT
+from fit_mojito_segment import band_trims, load_segment
+from mojito_experiments import EXP_DIR, EXPERIMENTS, START_DAY
 from scipy.stats import norm, pearsonr
 
 from tv_pspline_psd import (
@@ -39,10 +42,6 @@ from tv_pspline_psd import (
     set_paper_style,
     wdm_analysis_coefficients,
 )
-
-from check_XYZ import DATA, DT, orthogonal_aet
-from fit_mojito_segment import band_trims
-from mojito_experiments import EXPERIMENTS, EXP_DIR, START_DAY, load_segment
 
 set_paper_style()
 
@@ -75,18 +74,23 @@ def fit_channel(channel: str, nt: int, time_knots: int, start_day: float, days):
 # ---------------------------------------------------------------- #8 cross-val
 def cross_val_whitening(exp: str, channel: str, outdir: Path) -> dict:
     cfg = EXPERIMENTS[exp]
-    nt, days, tk = cfg["nt"], cfg["days"], cfg["time_knots"]
-    res_a, config, s0a = fit_channel(channel, nt, tk, START_DAY, days)
+    nt, tk = cfg["nt"], cfg["time_knots"]
+    (train_start, train_days), (test_start, test_days) = cfg["cv"]
+    res_a, config, s0a = fit_channel(channel, nt, tk, train_start, train_days)
     fg = res_a["freq_grid"]
     S_full = res_a["psd_mean"]                 # (n_time, n_freq), coeff units
     z_a = coeffs2d(res_a["coeffs"]) / np.sqrt(S_full)
     S_bar = S_full.mean(0)                      # time-averaged predictor S(f)
 
     # Disjoint next window of equal length, whitened by the window-A PSD.
-    series_b, s0b = load_segment(channel, nt, START_DAY + days, days)
+    series_b, s0b = load_segment(channel, nt, test_start, test_days)
     cb, _, fgb = wdm_analysis_coefficients(series_b, DT, nt, config)
-    k = min(fg.size, fgb.size)
-    z_b = coeffs2d(cb)[:, :k] / np.sqrt(S_bar[None, :k])
+    if not np.array_equal(fg, fgb):
+        raise ValueError(
+            f"cross-validation frequency grids differ for {exp}: "
+            f"train shape {fg.shape}, test shape {fgb.shape}"
+        )
+    z_b = coeffs2d(cb) / np.sqrt(S_bar[None, :])
 
     za, zb = z_a.ravel(), z_b.ravel()
     n_time = z_a.shape[0]
@@ -111,13 +115,14 @@ def cross_val_whitening(exp: str, channel: str, outdir: Path) -> dict:
     ax[1].set_title("QQ (out-of-sample)", fontsize=8)
     # (c) per-frequency mean z^2, in vs out
     ax[2].plot(fg, (z_a**2).mean(0), color="tab:blue", lw=0.5, label="in (A)")
-    ax[2].plot(fg[:k], (z_b**2).mean(0), color="tab:orange", lw=0.5, label="out (B)")
+    ax[2].plot(fg, (z_b**2).mean(0), color="tab:orange", lw=0.5, label="out (B)")
     ax[2].axhline(1.0, color="k", ls="--", lw=1.0)
     ax[2].fill_between(fg, 1 - 3 * sig_f, 1 + 3 * sig_f, color="0.7", alpha=0.4)
     ax[2].set_xscale("log"); ax[2].set_xlabel("f [Hz]")
     ax[2].set_ylabel(r"$\overline{z^2}$ per channel"); ax[2].legend(fontsize=7)
     fig.suptitle(f"{exp}: cross-validated whitening ({channel}) -- "
-                 f"fit d{s0a:.0f}-{s0a+days:.0f}, applied to d{s0b:.0f}-{s0b+days:.0f}", fontsize=9)
+                 f"fit d{s0a:.0f}-{s0a + train_days:.0f}, "
+                 f"applied to d{s0b:.0f}-{s0b + test_days:.0f}", fontsize=9)
     fig.savefig(outdir / "cross_val_whitening.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"[{exp}] cross-val: in z2={stats['in_mean_z2']:.3f} out z2={stats['out_mean_z2']:.3f}")

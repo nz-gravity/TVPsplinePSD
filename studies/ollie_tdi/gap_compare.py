@@ -17,16 +17,24 @@ from __future__ import annotations
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+from fit_aet_fullband import (
+    DATA_FULL,
+    DECIMATE,
+    GRID,
+    N_KNOTS_LIN,
+    N_KNOTS_LOG,
+    RESULTS_DIR,
+    TRIM_TIME_BINS,
+    fft_decimate,
+    gate_gaps,
+    good_time_bins,
+    lisa_like_gaps,
+    load_aet,
+)
 from scipy.signal import welch
 
 from tv_pspline_psd import PSplineConfig, set_paper_style, wdm_analysis_coefficients
-from datasets import wdm_white_noise_calibration
-
-from fit_aet_fullband import (
-    DATA_FULL, DECIMATE, GRID, N_KNOTS_LIN, N_KNOTS_LOG, RESULTS_DIR,
-    TRIM_TIME_BINS, fft_decimate, gate_gaps, good_time_bins, lisa_like_gaps,
-    load_aet,
-)
+from tv_pspline_psd.datasets import wdm_white_noise_calibration
 
 set_paper_style()
 
@@ -201,31 +209,38 @@ def main() -> None:
     ax.legend(fontsize=6.5, title=f"$f_\\star = {f_star*1e3:.1f}$ mHz",
               title_fontsize=6.5)
 
+    # Null tracks with 90% credible bands (per-posterior-draw centroids,
+    # saved by fit_aet_fullband). The two nulls are labelled in-plot; the
+    # legend carries only the fit/prediction distinction.
     ax = axes[2]
-    for f0, ls in ((0.06, "-"), (0.12, "-.")):
+    for f0, key in ((0.06, "null_track_006"), (0.12, "null_track_012")):
         for tag, fit in fits.items():
-            tg, fg = fit["time_grid_days"], fit["freq_grid"]
-            fnull = null_track(tg, fg, fit["psd_mean"], f0)
+            tg = fit["time_grid_days"]
+            lo, fnull, hi = fit[key]
             lam = np.interp(tg, t_L, L_bar / L_bar[0])
             pred = fnull.mean() * lam.mean() / lam
             r = np.corrcoef(fnull, pred)[0, 1]
-            ax.plot(tg, 1e6 * (fnull - fnull.mean()), ls, lw=1.0, **STYLES[tag])
+            ax.fill_between(tg, 1e6 * (lo - fnull.mean()),
+                            1e6 * (hi - fnull.mean()),
+                            color=STYLES[tag]["color"], alpha=0.2, lw=0)
+            ax.plot(tg, 1e6 * (fnull - fnull.mean()), lw=1.0, **STYLES[tag])
             print(f"[null-track] {tag} @ {f0:.2f} Hz: drift "
                   f"{fnull.max() - fnull.min():.2e} Hz, corr = {r:+.3f}")
             if tag == "ungapped":
-                ax.plot(tg, 1e6 * (pred - pred.mean()), ls, color="black",
+                ax.plot(tg, 1e6 * (pred - pred.mean()), color="black",
                         lw=0.8, alpha=0.6)
+                ax.annotate(f"{f0:.2f} Hz", (tg[-1], 1e6 * (fnull[-1] - fnull.mean())),
+                            textcoords="offset points", xytext=(-2, 8),
+                            fontsize=7, ha="right", va="bottom")
     for tag in fits:
         ax.plot([], [], "-", label=tag, **STYLES[tag])
     ax.plot([], [], "-", color="black", lw=0.8, alpha=0.6,
             label=r"$\propto 1/\bar L(t)$")
-    ax.plot([], [], "-", color="0.5", label="0.06 Hz")
-    ax.plot([], [], "-.", color="0.5", label="0.12 Hz")
     for t0, t1 in gaps_s:
         ax.axvspan(t0 / 86400, t1 / 86400, color="0.85", lw=0)
     ax.set_xlabel("time [days]")
     ax.set_ylabel(r"$f_{\rm null} - \langle f_{\rm null}\rangle$ [$\mu$Hz]")
-    ax.legend(fontsize=6.5, ncol=2)
+    ax.legend(fontsize=6.5, loc="upper left")
 
     out = RESULTS_DIR / "tdi_gap_compare.png"
     fig.savefig(out, dpi=200, bbox_inches="tight")

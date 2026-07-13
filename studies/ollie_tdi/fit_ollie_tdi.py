@@ -33,7 +33,7 @@ from tv_pspline_psd import (
     set_paper_style,
     summarize_mcmc_diagnostics,
 )
-from datasets import wdm_white_noise_calibration
+from tv_pspline_psd.datasets import wdm_white_noise_calibration
 
 set_paper_style()
 

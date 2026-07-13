@@ -20,15 +20,21 @@ import argparse
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+from fit_aet_fullband import (
+    DATA_FULL,
+    DECIMATE,
+    GRID,
+    N_KNOTS_LIN,
+    N_KNOTS_LOG,
+    RESULTS_DIR,
+    TRIM_TIME_BINS,
+    fft_decimate,
+    load_aet,
+)
 from scipy.signal import welch
 
 from tv_pspline_psd import PSplineConfig, set_paper_style, wdm_analysis_coefficients
-from datasets import wdm_white_noise_calibration
-
-from fit_aet_fullband import (
-    DATA_FULL, GRID, N_KNOTS_LIN, N_KNOTS_LOG, RESULTS_DIR, TRIM_TIME_BINS,
-    fft_decimate, load_aet, DECIMATE,
-)
+from tv_pspline_psd.datasets import wdm_white_noise_calibration
 
 set_paper_style()
 

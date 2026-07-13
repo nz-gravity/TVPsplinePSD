@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import numpyro
 from lisa_common import (
     draw_rfft_from_psd,
     freqs_analysis,
@@ -41,8 +42,6 @@ from lisa_common import (
     trim_frequency_band,
     wrap_phase,
 )
-
-import numpyro
 
 numpyro.set_host_device_count(2)
 setup_jax_and_matplotlib()
@@ -239,7 +238,6 @@ def gb_full_rfft(jgb, grid: dict, f0, fdot, amplitude, phi0, *, sky=None):
 def gb_full_rfft_np(jgb, grid: dict, f0, fdot, amplitude, phi0, sky=None):
     """NumPy embedding of the per-channel GB response (data generation / SNR)."""
     import jax.numpy as jnp
-
     from lisa_common import place_local_tdi
 
     params = jnp.asarray(np.asarray(_gb_params(np, f0, fdot, amplitude, phi0, sky), dtype=float))
@@ -329,7 +327,6 @@ def _psd_full(grid: dict) -> np.ndarray:
 
 def _wdm_transform(crop_rfft, wdm_kwargs):
     import jax.numpy as jnp
-
     from wdm_transform.transforms import forward_wdm_band
 
     return np.asarray(forward_wdm_band(jnp.asarray(crop_rfft), **wdm_kwargs))
@@ -426,7 +423,6 @@ def _quad_templates(band, f0, fdot):
     quadrature is exactly ``W90 = -i * W0`` in the rFFT domain -- so we evaluate
     the (expensive) GB waveform ONCE and derive both quadratures."""
     import jax.numpy as jnp
-
     from wdm_transform.transforms import forward_wdm_band
 
     w0_full = _full_rfft(jnp, band, f0, fdot, 1.0, 0.0)  # (n_chan, n_freqs)

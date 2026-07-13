@@ -23,11 +23,10 @@ import argparse
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+from check_XYZ import DATA, DT, RESULTS_DIR, orthogonal_aet
 from scipy.ndimage import uniform_filter
 
 from tv_pspline_psd import PSplineConfig, set_paper_style, wdm_analysis_coefficients
-
-from check_XYZ import DATA, DT, RESULTS_DIR, orthogonal_aet
 
 set_paper_style()
 

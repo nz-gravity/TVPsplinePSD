@@ -31,6 +31,7 @@ import xarray as xr
 from .config import PSplineConfig
 from .inference import reconstruct_eig_coeff_samples, surface_summaries
 from .metrics import mse_log_psd
+from .provenance import provenance
 from .splines import evaluate_bspline_basis
 
 # Names threaded through reconstruct_eig_coeff_samples / surface_summaries.
@@ -90,6 +91,7 @@ def results_to_idata(
 
     attrs: dict[str, object] = {
         "config": json.dumps(asdict(config)),
+        "provenance": json.dumps(results.get("provenance", provenance(config=config))),
         "nuts_runtime_s": _as_float(results.get("nuts_runtime_s")),
         "vi_runtime_s": _as_float(results.get("vi_runtime_s")),
         "divergences": int(results.get("divergences", 0)),
@@ -152,7 +154,8 @@ def surface_from_idata(
     (posterior mean only, matching ``evaluate_dense_posterior_mean``).
 
     Returns a dict with ``time_grid``, ``freq_grid``, ``log_psd_mean`` and
-    ``psd_mean`` (always), plus ``log_psd_lower`` / ``log_psd_upper`` /
+    ``psd_geometric_mean`` (always; with the deprecated ``psd_mean`` alias),
+    plus ``log_psd_lower`` / ``log_psd_upper`` /
     ``psd_lower`` / ``psd_upper`` on the native analysis grid.
     """
     config = _config_from_idata(idata)
@@ -178,6 +181,7 @@ def surface_from_idata(
         "log_psd_mean": log_mean,
         "log_psd_lower": log_lower,
         "log_psd_upper": log_upper,
+        "psd_geometric_mean": np.exp(log_mean),
         "psd_mean": np.exp(log_mean),
         "psd_lower": np.exp(log_lower),
         "psd_upper": np.exp(log_upper),
@@ -207,6 +211,7 @@ def _dense_surface(const, config, whitened, eig_samples, n_time_dense, n_freq_de
         "time_grid": dense_time,
         "freq_grid": dense_freq,
         "log_psd_mean": dense_log_psd,
+        "psd_geometric_mean": np.exp(dense_log_psd),
         "psd_mean": np.exp(dense_log_psd),
     }
 

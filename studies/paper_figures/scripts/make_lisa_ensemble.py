@@ -31,19 +31,19 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from datasets import LISANoiseConfig
-from datasets.lisa_tdi import (
-    gb_ae_signal,
-    optimal_snr_ae,
-    simulate_tv_ae_tdi,
-    true_tv_ae_tdi_psd,
-)
 from tv_pspline_psd import (
     PSplineConfig,
     run_multichannel_joint_mcmc,
     save_figure,
     set_paper_style,
     wdm_analysis_coefficients,
+)
+from tv_pspline_psd.datasets import LISANoiseConfig
+from tv_pspline_psd.datasets.lisa_tdi import (
+    gb_ae_signal,
+    optimal_snr_ae,
+    simulate_tv_ae_tdi,
+    true_tv_ae_tdi_psd,
 )
 
 FIG_DIR = Path(__file__).resolve().parents[1] / "figures"

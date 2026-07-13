@@ -37,15 +37,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from datasets import LISANoiseConfig
-from datasets.lisa_tdi import (
-    gb_tdi_signal,
-    lisa_tdi_noise_psd,
-    optimal_snr,
-    simulate_tdi_noise,
-    simulate_tv_lisa_tdi,
-    true_tv_lisa_tdi_psd,
-)
 from tv_pspline_psd import (
     PSplineConfig,
     run_gibbs_signal_noise_mcmc,
@@ -54,6 +45,15 @@ from tv_pspline_psd import (
     save_figure,
     set_paper_style,
     wdm_analysis_coefficients,
+)
+from tv_pspline_psd.datasets import LISANoiseConfig
+from tv_pspline_psd.datasets.lisa_tdi import (
+    gb_tdi_signal,
+    lisa_tdi_noise_psd,
+    optimal_snr,
+    simulate_tdi_noise,
+    simulate_tv_lisa_tdi,
+    true_tv_lisa_tdi_psd,
 )
 
 FIG_DIR = Path(__file__).resolve().parents[1] / "figures"

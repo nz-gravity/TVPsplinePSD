@@ -25,13 +25,12 @@ import json
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+from check_XYZ import DATA, DT, orthogonal_aet
+from fit_mojito_segment import band_trims
+from mojito_experiments import EXP_DIR, EXPERIMENTS, START_DAY
 from scipy.stats import pearsonr
 
 from tv_pspline_psd import PSplineConfig, set_paper_style, wdm_analysis_coefficients
-
-from check_XYZ import DATA, DT, orthogonal_aet
-from fit_mojito_segment import band_trims
-from mojito_experiments import EXPERIMENTS, EXP_DIR, START_DAY
 
 set_paper_style()
 

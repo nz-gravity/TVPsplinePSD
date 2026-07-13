@@ -1,4 +1,4 @@
-"""Non-centered (whitened) tensor-product log-P-spline WDM Whittle model.
+"""Whitened tensor-product log-P-spline WDM Whittle model.
 
 The latent surface is ``log S = B_t W B_f^T`` with an anisotropic roughness
 prior on ``vec(W)``:
@@ -11,10 +11,9 @@ precision is diagonal in the tensor eigenbasis with eigenvalues
 
     d[a, b] = phi_t * lam_t[a] + phi_f * lam_f[b].
 
-We sample standard-normal eigen-coefficients ``s`` and rescale by
-``1 / sqrt(d)`` (a fixed weak scale on the joint null space). This non-centered
-form removes the ``phi``-vs-weights funnel that otherwise causes vanishing
-gradients and maximal leapfrog/tree-depth during NUTS.
+The eigen-coefficients may be sampled in centered or non-centered form. Both
+parameterizations use the same prior scale and expose the same reconstructed
+coefficients to callers.
 """
 
 from __future__ import annotations
@@ -92,6 +91,55 @@ def _sample_log_gamma(
     return phi
 
 
+def eigen_prior_scale(
+    phi_time: jnp.ndarray,
+    phi_freq: jnp.ndarray,
+    lam_time: jnp.ndarray,
+    lam_freq: jnp.ndarray,
+    joint_null: jnp.ndarray,
+    config: PSplineConfig,
+) -> jnp.ndarray:
+    """Return the tensor eigen-coefficient prior scale.
+
+    The fixed scale on the joint penalty null space makes the otherwise
+    improper P-spline prior proper. One-dimensional callers can pass a
+    singleton zero-valued time axis and remove it from the returned array.
+    """
+    precision = (
+        phi_time * lam_time[:, None]
+        + phi_freq * lam_freq[None, :]
+    )
+    return jnp.where(
+        joint_null,
+        1.0 / jnp.sqrt(config.null_precision),
+        1.0 / jnp.sqrt(precision + config.ridge_eps),
+    )
+
+
+def sample_eigen_coefficients(
+    name: str,
+    scale: jnp.ndarray,
+    shape: tuple[int, ...],
+    config: PSplineConfig,
+) -> jnp.ndarray:
+    """Sample eigen-coefficients while honoring ``config.centered``.
+
+    In centered form the sampling site is the coefficient itself and has prior
+    ``Normal(0, scale)``. In non-centered form the site is standard Normal and
+    is multiplied by ``scale`` before being returned.
+    """
+    n_weights = int(np.prod(shape))
+    flat_scale = jnp.broadcast_to(scale, shape).reshape(-1)
+    with numpyro.plate(f"{name}_plate", n_weights):
+        if config.centered:
+            site = numpyro.sample(name, dist.Normal(0.0, flat_scale))
+            coeffs = site
+        else:
+            site = numpyro.sample(name, dist.Normal(0.0, 1.0))
+            coeffs = site * flat_scale
+    return coeffs.reshape(shape)
+
+
 def pspline_surface_model(
     coeffs: jnp.ndarray,
     basis_eig_time: jnp.ndarray,
@@ -129,24 +177,12 @@ def pspline_surface_model(
         "phi_freq", config.alpha_phi, config.beta_phi, config.phi_log_base_scale
     )
 
-    # Diagonal precision of the tensor prior in the eigenbasis.
-    d = phi_time * lam_time[:, None] + phi_freq * lam_freq[None, :]
-    scale = jnp.where(
-        joint_null,
-        1.0 / jnp.sqrt(config.null_precision),
-        1.0 / jnp.sqrt(d + config.ridge_eps),
+    scale = eigen_prior_scale(
+        phi_time, phi_freq, lam_time, lam_freq, joint_null, config
     )
-
-    n_weights = n_basis_time * n_basis_freq
-    if config.centered:
-        # Centered: the site *is* the eigen-coefficient, prior N(0, 1/sqrt(d)).
-        with numpyro.plate("eig_coeffs", n_weights):
-            s_flat = numpyro.sample("s", dist.Normal(0.0, scale.reshape(-1)))
-        eig_coeffs = s_flat.reshape((n_basis_time, n_basis_freq))
-    else:
-        with numpyro.plate("eig_coeffs", n_weights):
-            s_flat = numpyro.sample("s", dist.Normal(0.0, 1.0))
-        eig_coeffs = s_flat.reshape((n_basis_time, n_basis_freq)) * scale
+    eig_coeffs = sample_eigen_coefficients(
+        "s", scale, (n_basis_time, n_basis_freq), config
+    )
 
     log_psd = basis_eig_time @ eig_coeffs @ basis_eig_freq.T
 

@@ -37,7 +37,6 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import RegularGridInterpolator
 
-from datasets import simulate_ls2, true_psd_ls2, wdm_white_noise_calibration
 from tv_pspline_psd import (
     PSplineConfig,
     interval_coverage,
@@ -46,6 +45,11 @@ from tv_pspline_psd import (
     set_paper_style,
     summarize_mcmc_diagnostics,
     tang_moving_periodogram,
+)
+from tv_pspline_psd.datasets import (
+    simulate_ls2,
+    true_psd_ls2,
+    wdm_white_noise_calibration,
 )
 
 set_paper_style()

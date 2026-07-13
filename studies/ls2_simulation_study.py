@@ -23,12 +23,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from datasets import (
-    monte_carlo_reference,
-    simulate_ls2,
-    true_psd_ls2,
-    wdm_white_noise_calibration,
-)
 from tv_pspline_psd import (
     PSplineConfig,
     interval_coverage,
@@ -37,6 +31,12 @@ from tv_pspline_psd import (
     run_wdm_psd_mcmc,
     save_run,
     summarize_mcmc_diagnostics,
+)
+from tv_pspline_psd.datasets import (
+    monte_carlo_reference,
+    simulate_ls2,
+    true_psd_ls2,
+    wdm_white_noise_calibration,
 )
 
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "studies" / "results" / "ls2"

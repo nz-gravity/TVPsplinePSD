@@ -10,8 +10,6 @@ Gaussian *coefficient* likelihood enables; a power periodogram could not.
 
 from __future__ import annotations
 
-import time
-
 import jax.numpy as jnp
 import numpy as np
 import numpyro
@@ -23,8 +21,10 @@ from .config import PSplineConfig
 from .inference import reconstruct_eig_coeff_samples, surface_summaries
 from .model import (
     _sample_log_gamma,
+    eigen_prior_scale,
     initialize_with_penalized_least_squares,
     pspline_surface_model,
+    sample_eigen_coefficients,
     whiten_penalty_pair,
     whitened_init_values,
 )
@@ -32,129 +32,6 @@ from .splines import (
     create_bspline_basis,
     create_bspline_roughness_penalty,
 )
-
-
-def _joint_model(coeffs, templates, basis_eig_time, basis_eig_freq,
-                 lam_time, lam_freq, joint_null, amp_scale, config,
-                 store_surface=True):
-    n_basis_time = basis_eig_time.shape[1]
-    n_basis_freq = basis_eig_freq.shape[1]
-
-    phi_time = _sample_log_gamma("phi_time", config.alpha_phi, config.beta_phi,
-                                 config.phi_log_base_scale)
-    phi_freq = _sample_log_gamma("phi_freq", config.alpha_phi, config.beta_phi,
-                                 config.phi_log_base_scale)
-    d = phi_time * lam_time[:, None] + phi_freq * lam_freq[None, :]
-    scale = jnp.where(joint_null, 1.0 / jnp.sqrt(config.null_precision),
-                      1.0 / jnp.sqrt(d + config.ridge_eps))
-    n_weights = n_basis_time * n_basis_freq
-    with numpyro.plate("eig_coeffs", n_weights):
-        s_flat = numpyro.sample("s", dist.Normal(0.0, 1.0))
-    log_psd = basis_eig_time @ (s_flat.reshape((n_basis_time, n_basis_freq)) * scale) @ basis_eig_freq.T
-
-    with numpyro.plate("templates", templates.shape[0]):
-        beta = numpyro.sample("beta", dist.Normal(0.0, amp_scale))
-    signal = jnp.tensordot(beta, templates, axes=1)  # (n_time, n_freq)
-
-    # Single real coefficient per cell (WDM): w ~ N(signal, S).
-    resid = coeffs - signal
-    log_like = -0.5 * jnp.sum(log_psd + resid**2 * jnp.exp(-log_psd))
-    numpyro.factor("whittle", log_like)
-    if store_surface:
-        numpyro.deterministic("log_psd", log_psd)
-
-
-def run_joint_signal_noise_mcmc(
-    coeffs: np.ndarray,
-    templates: np.ndarray,
-    time_grid: np.ndarray,
-    freq_grid: np.ndarray,
-    *,
-    config: PSplineConfig,
-    amp_scale: float | None = None,
-    n_warmup: int = 400,
-    n_samples: int = 400,
-    num_chains: int = 1,
-    random_seed: int = 7,
-    max_tree_depth: int = 10,
-    target_accept_prob: float = 0.9,
-    store_log_psd_samples: bool = True,
-) -> dict[str, object]:
-    """Jointly infer the noise PSD surface and the signal amplitudes.
-
-    Args:
-        coeffs: WDM coefficients of shape ``(n_time, n_freq)``.
-        templates: Template coefficients of shape ``(K, n_time, n_freq)``; the
-            signal mean is ``sum_k beta_k * templates[k]``.
-        time_grid: Rescaled time grid in ``[0, 1]``.
-        freq_grid: Frequencies (Hz).
-        config: Estimator configuration.
-        amp_scale: Prior scale for the amplitudes ``beta`` (default: data RMS).
-        store_log_psd_samples: see :func:`fit_log_pspline_surface`.
-    """
-    coeffs = np.asarray(coeffs, dtype=float)
-    templates = np.asarray(templates, dtype=float)
-    power = coeffs**2
-    freq_unit = freq_grid / np.maximum(freq_grid[-1], 1e-12)
-    if amp_scale is None:
-        amp_scale = float(np.sqrt(np.mean(coeffs**2)))
-
-    B_time, knots_time = create_bspline_basis(
-        time_grid, config.n_interior_knots_time, degree=config.degree_time
-    )
-    B_freq, knots_freq = create_bspline_basis(
-        freq_unit, config.n_interior_knots_freq, degree=config.degree_freq
-    )
-    P_time = create_bspline_roughness_penalty(
-        knots_time, degree=config.degree_time, derivative_order=config.diff_order_time
-    )
-    P_freq = create_bspline_roughness_penalty(
-        knots_freq, degree=config.degree_freq, derivative_order=config.diff_order_freq
-    )
-    whitened = whiten_penalty_pair(P_time, P_freq)
-    basis_eig_time = B_time @ whitened["U_time"]
-    basis_eig_freq = B_freq @ whitened["U_freq"]
-
-    pls_init = initialize_with_penalized_least_squares(
-        power, B_time, B_freq, P_time, P_freq, config
-    )
-    init_sites = whitened_init_values(pls_init, whitened, config)
-    init_sites["beta"] = np.zeros(templates.shape[0])
-
-    kernel = NUTS(
-        _joint_model,
-        init_strategy=init_to_value(values=init_sites),
-        max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob,
-    )
-    mcmc = MCMC(kernel, num_warmup=n_warmup, num_samples=n_samples,
-                num_chains=num_chains, chain_method="sequential", progress_bar=False)
-    mcmc.run(
-        random.PRNGKey(random_seed),
-        jnp.asarray(coeffs), jnp.asarray(templates),
-        jnp.asarray(basis_eig_time), jnp.asarray(basis_eig_freq),
-        jnp.asarray(whitened["lam_time"]), jnp.asarray(whitened["lam_freq"]),
-        jnp.asarray(whitened["joint_null"]), float(amp_scale), config,
-        store_log_psd_samples,
-        extra_fields=("diverging",),
-    )
-    samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
-    eig_samples = reconstruct_eig_coeff_samples(samples, whitened, config)
-    log_mean, log_lower, log_upper = surface_summaries(
-        eig_samples, basis_eig_time, basis_eig_freq,
-        precomputed=samples.get("log_psd"),
-    )
-    return {
-        "mcmc": mcmc,
-        "samples": samples,
-        "time_grid": np.asarray(time_grid),
-        "freq_grid": np.asarray(freq_grid),
-        "beta_mean": samples["beta"].mean(axis=0),
-        "beta_std": samples["beta"].std(axis=0),
-        "psd_mean": np.exp(log_mean),
-        "psd_lower": np.exp(log_lower),
-        "psd_upper": np.exp(log_upper),
-        "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
-    }
 
 
 def _signal_amplitude_model(coeffs, templates, log_psd, amp_scale):
@@ -196,8 +73,7 @@ def run_gibbs_signal_noise_mcmc(
     smooth, high-dimensional noise geometry and the low-dimensional amplitude
     geometry adapt their NUTS step size and mass matrix independently; the Gibbs
     sweep couples them through the conditioning. This is the
-    Metropolis-within-Gibbs analogue of :func:`run_joint_signal_noise_mcmc`,
-    which instead samples both blocks with a single joint trajectory.
+    Metropolis-within-Gibbs sampler for the signal and noise blocks.
 
     Each block re-adapts at every sweep (adaptive Gibbs), initialised from the
     previous sweep, so ``block_warmup`` only needs to refine an already-good
@@ -268,12 +144,15 @@ def run_gibbs_signal_noise_mcmc(
         key, k_noise = random.split(key)
         noise_mcmc.run(
             k_noise, resid, basis_eig_time, basis_eig_freq,
-            lam_time, lam_freq, joint_null, config, True,
+            lam_time, lam_freq, joint_null, config, False,
             init_params=noise_init, extra_fields=("diverging",))
         nsamp = {k: np.asarray(v) for k, v in noise_mcmc.get_samples().items()}
         noise_init = {"s": nsamp["s"][-1], "phi_time": nsamp["phi_time"][-1],
                       "phi_freq": nsamp["phi_freq"][-1]}
-        log_psd_state = jnp.asarray(nsamp["log_psd"][-1])
+        sweep_eig = reconstruct_eig_coeff_samples(nsamp, whitened, config)
+        log_psd_state = jnp.asarray(
+            basis_eig_time @ sweep_eig[-1] @ basis_eig_freq.T
+        )
         divergences += int(np.asarray(noise_mcmc.get_extra_fields()["diverging"]).sum())
 
         # --- Signal block: amplitudes with the noise surface fixed ---
@@ -288,507 +167,28 @@ def run_gibbs_signal_noise_mcmc(
 
         if sweep >= n_burn_sweeps:
             beta_samples.append(ssamp["beta"])
-            eig_samples.append(
-                reconstruct_eig_coeff_samples(nsamp, whitened, config))
+            eig_samples.append(sweep_eig)
 
     beta_draws = np.concatenate(beta_samples, axis=0)
     eig_draws = np.concatenate(eig_samples, axis=0)
     log_mean, log_lower, log_upper = surface_summaries(
         eig_draws, np.asarray(basis_eig_time), np.asarray(basis_eig_freq))
+    psd_geometric_mean = np.exp(log_mean)
     return {
         "time_grid": np.asarray(time_grid),
         "freq_grid": np.asarray(freq_grid),
         "beta_mean": beta_draws.mean(axis=0),
         "beta_std": beta_draws.std(axis=0),
         "beta_samples": beta_draws,
-        "psd_mean": np.exp(log_mean),
+        "log_psd_mean": log_mean,
+        "psd_geometric_mean": psd_geometric_mean,
+        "psd_mean": psd_geometric_mean,  # Deprecated compatibility alias.
         "psd_lower": np.exp(log_lower),
         "psd_upper": np.exp(log_upper),
         "n_sweeps": n_sweeps,
         "n_post_sweeps": n_sweeps - n_burn_sweeps,
         "divergences": divergences,
     }
-
-
-def _stft_signal_amplitude_model(resid_signal, templates, log_psd, amp_scale):
-    """NUTS update of the linear amplitudes ``beta`` with the noise fixed.
-
-    The STFT cell carries two real components (real, imag), and both share the
-    same noise log-PSD (one channel). With the noise surface ``log_psd`` held
-    fixed, the amplitudes enter only the Gaussian data term
-
-        -0.5 * sum_r (d_r - sum_k beta_k g_{k,r})^2 * exp(-log_psd),
-
-    summed over the ``r = 0, 1`` (real, imag) component axis.
-
-    Args:
-        resid_signal: Data coefficients ``(2, n_time, n_freq)`` (real, imag).
-        templates: Template components ``(K, 2, n_time, n_freq)``.
-        log_psd: Fixed noise log-PSD ``(n_time, n_freq)`` (shared across the 2
-            components).
-        amp_scale: Prior scale for ``beta``.
-    """
-    with numpyro.plate("templates", templates.shape[0]):
-        beta = numpyro.sample("beta", dist.Normal(0.0, amp_scale))
-    signal = jnp.tensordot(beta, templates, axes=1)  # (2, n_time, n_freq)
-    resid = resid_signal - signal
-    inv_psd = jnp.exp(-log_psd)[None, :, :]  # broadcast over the 2 components
-    log_like = -0.5 * jnp.sum(resid**2 * inv_psd)
-    numpyro.factor("stft_signal", log_like)
-
-
-def run_gibbs_stft_signal_noise_mcmc(
-    coeffs: np.ndarray,
-    templates: np.ndarray,
-    time_grid: np.ndarray,
-    freq_grid: np.ndarray,
-    *,
-    config: PSplineConfig,
-    amp_scale: float | None = None,
-    n_sweeps: int = 60,
-    n_burnin_sweeps: int = 20,
-    noise_steps: int = 30,
-    signal_steps: int = 30,
-    noise_warmup: int = 150,
-    signal_warmup: int = 80,
-    random_seed: int = 7,
-    max_tree_depth: int = 10,
-    target_accept_prob: float = 0.9,
-) -> dict[str, object]:
-    """Blocked-Gibbs joint signal + non-stationary-noise sampler for the STFT.
-
-    The phase-retaining moving-Fourier front end keeps the real and imaginary
-    parts of each STFT coefficient (``R = 2``), so a *coherent* signal mean can be
-    subtracted -- impossible with a power-only periodogram, which discards phase.
-    This is the STFT analogue of :func:`run_gibbs_signal_noise_mcmc`: a
-    Metropolis-within-Gibbs sampler that alternates
-
-      1. a NUTS update of the whitened P-spline **noise** block on the residual
-         coefficients ``data - signal`` (both components), and
-      2. a NUTS update of the linear-amplitude **signal** block with the noise
-         surface fixed,
-
-    warm-starting each block from the previous sweep's state via ``init_params``.
-
-    Template-format convention:
-        ``templates`` has shape ``(K, 2, n_time, n_freq)`` -- the real and
-        imaginary STFT components of each of the ``K`` templates, matching the
-        ``(real, imag)`` layout of ``coeffs`` from :func:`moving_stft`. The signal
-        mean for component ``r`` is ``sum_k beta_k * templates[k, r]``. A complex
-        ``(K, n_time, n_freq)`` array is also accepted and split into its real and
-        imaginary parts.
-
-    Args:
-        coeffs: STFT coefficients ``(2, n_time, n_freq)`` = (real, imag).
-        templates: Signal templates ``(K, 2, n_time, n_freq)`` real/imag
-            components, or complex ``(K, n_time, n_freq)``.
-        time_grid: Rescaled segment-centre times in ``[0, 1]``.
-        freq_grid: Channel frequencies (Hz).
-        config: Estimator configuration.
-        amp_scale: Prior scale for the amplitudes ``beta`` (default: data RMS).
-        n_sweeps: Total Gibbs sweeps (signal + noise alternations).
-        n_burnin_sweeps: Leading sweeps discarded before collecting samples.
-        noise_steps, signal_steps: Kept NUTS samples per block per sweep.
-        noise_warmup, signal_warmup: NUTS warmup steps for the first sweep of
-            each block (subsequent sweeps reuse the adapted mass matrix via the
-            warm start and use a short re-warmup).
-
-    Returns:
-        A results dict with ``beta_mean``, ``beta_std``, ``psd_mean/lower/upper``
-        and ``divergences``, mirroring :func:`run_joint_signal_noise_mcmc`.
-    """
-    coeffs = np.asarray(coeffs)
-    if coeffs.ndim != 3 or coeffs.shape[0] != 2:
-        raise ValueError("coeffs must have shape (2, n_time, n_freq).")
-    coeffs = coeffs.astype(float)
-
-    templates = np.asarray(templates)
-    if np.iscomplexobj(templates):
-        templates = np.stack([templates.real, templates.imag], axis=1)
-    templates = templates.astype(float)
-    if templates.ndim != 4 or templates.shape[1] != 2:
-        raise ValueError("templates must have shape (K, 2, n_time, n_freq).")
-    n_templates = templates.shape[0]
-
-    freq_unit = freq_grid / np.maximum(freq_grid[-1], 1e-12)
-    if amp_scale is None:
-        amp_scale = float(np.sqrt(np.mean(coeffs**2)))
-
-    B_time, knots_time = create_bspline_basis(
-        time_grid, config.n_interior_knots_time, degree=config.degree_time
-    )
-    B_freq, knots_freq = create_bspline_basis(
-        freq_unit, config.n_interior_knots_freq, degree=config.degree_freq
-    )
-    P_time = create_bspline_roughness_penalty(
-        knots_time, degree=config.degree_time, derivative_order=config.diff_order_time
-    )
-    P_freq = create_bspline_roughness_penalty(
-        knots_freq, degree=config.degree_freq, derivative_order=config.diff_order_freq
-    )
-    whitened = whiten_penalty_pair(P_time, P_freq)
-    basis_eig_time = B_time @ whitened["U_time"]
-    basis_eig_freq = B_freq @ whitened["U_freq"]
-
-    eig_time_j = jnp.asarray(basis_eig_time)
-    eig_freq_j = jnp.asarray(basis_eig_freq)
-    lam_time_j = jnp.asarray(whitened["lam_time"])
-    lam_freq_j = jnp.asarray(whitened["lam_freq"])
-    joint_null_j = jnp.asarray(whitened["joint_null"])
-    coeffs_j = jnp.asarray(coeffs)
-    templates_j = jnp.asarray(templates)
-
-    # Warm start: linear amplitudes from least squares, then the noise block from
-    # the per-component mean power of the *signal-subtracted* data (the raw power
-    # would inflate the floor in the source's channel and bias the amplitude low).
-    template_mat = templates.reshape(n_templates, -1).T
-    beta_init, *_ = np.linalg.lstsq(template_mat, coeffs.reshape(-1), rcond=None)
-    resid_init = coeffs - np.tensordot(np.asarray(beta_init, dtype=float), templates, axes=1)
-    power = np.sum(resid_init**2, axis=0) / coeffs.shape[0]
-    pls_init = initialize_with_penalized_least_squares(
-        power, B_time, B_freq, P_time, P_freq, config
-    )
-    noise_init = whitened_init_values(pls_init, whitened, config)
-
-    def _current_log_psd(noise_state):
-        eig = reconstruct_eig_coeff_samples(
-            {k: np.asarray(v)[None] for k, v in noise_state.items()}, whitened, config
-        )[0]
-        return jnp.asarray(basis_eig_time @ eig @ basis_eig_freq.T)
-
-    key = random.PRNGKey(random_seed)
-    noise_kernel = NUTS(
-        pspline_surface_model,
-        max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob,
-    )
-    signal_kernel = NUTS(
-        _stft_signal_amplitude_model,
-        max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob,
-    )
-
-    beta_samples: list[np.ndarray] = []
-    eig_samples: list[np.ndarray] = []
-    log_psd_samples: list[np.ndarray] = []
-    divergences = 0
-
-    beta_state = np.asarray(beta_init, dtype=float)
-    noise_state = {k: np.asarray(v) for k, v in noise_init.items()}
-
-    for sweep in range(n_sweeps):
-        first = sweep == 0
-        # --- Noise block: fit P-spline surface to the signal-subtracted data. ---
-        signal = jnp.tensordot(jnp.asarray(beta_state), templates_j, axes=1)
-        resid = coeffs_j - signal  # (2, n_time, n_freq)
-        key, sub = random.split(key)
-        noise_mcmc = MCMC(
-            noise_kernel, num_warmup=(noise_warmup if first else noise_warmup // 3),
-            num_samples=noise_steps, num_chains=1, chain_method="sequential",
-            progress_bar=False,
-        )
-        noise_mcmc.run(
-            sub, resid, eig_time_j, eig_freq_j, lam_time_j, lam_freq_j,
-            joint_null_j, config, True,
-            init_params={k: jnp.asarray(v) for k, v in noise_state.items()},
-            extra_fields=("diverging",),
-        )
-        noise_samp = {k: np.asarray(v) for k, v in noise_mcmc.get_samples().items()}
-        noise_state = {k: v[-1] for k, v in noise_samp.items() if k != "log_psd"}
-        divergences += int(
-            np.asarray(noise_mcmc.get_extra_fields()["diverging"]).sum()
-        )
-        log_psd_fixed = _current_log_psd(noise_state)
-
-        # --- Signal block: update amplitudes with the noise surface fixed. ---
-        key, sub = random.split(key)
-        signal_mcmc = MCMC(
-            signal_kernel, num_warmup=(signal_warmup if first else signal_warmup // 3),
-            num_samples=signal_steps, num_chains=1, chain_method="sequential",
-            progress_bar=False,
-        )
-        signal_mcmc.run(
-            sub, coeffs_j, templates_j, log_psd_fixed, float(amp_scale),
-            init_params={"beta": jnp.asarray(beta_state)},
-            extra_fields=("diverging",),
-        )
-        beta_post = np.asarray(signal_mcmc.get_samples()["beta"])
-        beta_state = beta_post[-1]
-        divergences += int(
-            np.asarray(signal_mcmc.get_extra_fields()["diverging"]).sum()
-        )
-
-        if sweep >= n_burnin_sweeps:
-            beta_samples.append(beta_post)
-            eig = reconstruct_eig_coeff_samples(noise_samp, whitened, config)
-            eig_samples.append(eig)
-            log_psd_samples.append(np.asarray(noise_samp["log_psd"]))
-
-    beta_all = np.concatenate(beta_samples, axis=0)
-    eig_all = np.concatenate(eig_samples, axis=0)
-    log_psd_all = np.concatenate(log_psd_samples, axis=0)
-    log_mean, log_lower, log_upper = surface_summaries(
-        eig_all, basis_eig_time, basis_eig_freq, precomputed=log_psd_all,
-    )
-    return {
-        "time_grid": np.asarray(time_grid),
-        "freq_grid": np.asarray(freq_grid),
-        "beta_samples": beta_all,
-        "beta_mean": beta_all.mean(axis=0),
-        "beta_std": beta_all.std(axis=0),
-        "psd_mean": np.exp(log_mean),
-        "psd_lower": np.exp(log_lower),
-        "psd_upper": np.exp(log_upper),
-        "divergences": int(divergences),
-    }
-
-
-def _sobh_wdm_model(coeffs, signal_fn, theta_ref, theta_scale,
-                    basis_eig_time, basis_eig_freq,
-                    lam_time, lam_freq, joint_null, config):
-    """Joint nonlinear-SOBH-signal + non-stationary-noise WDM model.
-
-    The signal mean is the WDM transform of a chirping binary, ``signal_fn(theta)``
-    with ``theta = (Mc, tc, ln dL)`` sampled in a non-centered form around the
-    reference ``theta_ref`` with widths ``theta_scale``. Because ``signal_fn`` is
-    jax-differentiable (ripple + jax WDM backend), the source parameters and the
-    whitened P-spline noise surface are sampled together with a single NUTS
-    trajectory.
-    """
-    n_basis_time = basis_eig_time.shape[1]
-    n_basis_freq = basis_eig_freq.shape[1]
-
-    # Non-centered source parameters: Mc and dL are positive (log-offset), tc
-    # additive. theta = (Mc, tc, ln dL).
-    z_mc = numpyro.sample("z_mc", dist.Normal(0.0, 1.0))
-    z_tc = numpyro.sample("z_tc", dist.Normal(0.0, 1.0))
-    z_d = numpyro.sample("z_d", dist.Normal(0.0, 1.0))
-    mc = theta_ref[0] * jnp.exp(theta_scale[0] * z_mc)
-    tc = theta_ref[1] + theta_scale[1] * z_tc
-    ln_dl = theta_ref[2] + theta_scale[2] * z_d
-    theta = jnp.array([mc, tc, ln_dl])
-    signal = signal_fn(theta)
-    numpyro.deterministic("Mc", mc)
-    numpyro.deterministic("tc", tc)
-    numpyro.deterministic("dL", jnp.exp(ln_dl))
-
-    # Whitened tensor-product log-P-spline noise prior (as in pspline_surface_model).
-    phi_time = _sample_log_gamma("phi_time", config.alpha_phi, config.beta_phi,
-                                 config.phi_log_base_scale)
-    phi_freq = _sample_log_gamma("phi_freq", config.alpha_phi, config.beta_phi,
-                                 config.phi_log_base_scale)
-    d = phi_time * lam_time[:, None] + phi_freq * lam_freq[None, :]
-    scale = jnp.where(joint_null, 1.0 / jnp.sqrt(config.null_precision),
-                      1.0 / jnp.sqrt(d + config.ridge_eps))
-    with numpyro.plate("eig_coeffs", n_basis_time * n_basis_freq):
-        s_flat = numpyro.sample("s", dist.Normal(0.0, 1.0))
-    log_psd = basis_eig_time @ (s_flat.reshape((n_basis_time, n_basis_freq)) * scale) @ basis_eig_freq.T
-
-    resid = coeffs - signal
-    numpyro.factor("whittle", -0.5 * jnp.sum(log_psd + resid**2 * jnp.exp(-log_psd)))
-    numpyro.deterministic("log_psd", log_psd)
-
-
-def run_joint_sobh_wdm_mcmc(
-    coeffs: np.ndarray,
-    time_grid: np.ndarray,
-    freq_grid: np.ndarray,
-    signal_fn,
-    theta_ref: np.ndarray,
-    *,
-    config: PSplineConfig,
-    theta_scale: np.ndarray | None = None,
-    n_warmup: int = 500,
-    n_samples: int = 500,
-    num_chains: int = 1,
-    random_seed: int = 7,
-    max_tree_depth: int = 10,
-    target_accept_prob: float = 0.9,
-) -> dict[str, object]:
-    """Joint SOBH source + time-varying noise PSD fit on the WDM grid.
-
-    Args:
-        coeffs: WDM data coefficients ``(n_time, n_freq)`` on the trimmed grid.
-        time_grid, freq_grid: the trimmed analysis grid (from the signal grid).
-        signal_fn: jax closure ``theta=(Mc, tc, ln_dL) -> WDM signal coeffs`` from
-            :func:`tv_pspline_psd.sobh_signal.make_sobh_wdm_signal_fn`.
-        theta_ref: reference ``(Mc, tc, ln_dL)`` (the non-centering centre and the
-            PLS-init point for the noise surface).
-        theta_scale: prior widths ``(sigma_lnMc, sigma_tc, sigma_lnD)``; default
-            ``(0.05, 0.05*T, 0.3)`` with ``T`` inferred from the grid is *not*
-            available here, so a generic ``(0.1, |tc_ref|*0.05+1, 0.5)`` is used.
-    """
-    coeffs = np.asarray(coeffs, dtype=float)
-    theta_ref = np.asarray(theta_ref, dtype=float)
-    if theta_scale is None:
-        theta_scale = np.array([0.1, abs(theta_ref[1]) * 0.05 + 1.0, 0.5])
-    theta_scale = np.asarray(theta_scale, dtype=float)
-
-    freq_unit = freq_grid / np.maximum(freq_grid[-1], 1e-12)
-    B_time, knots_time = create_bspline_basis(
-        time_grid, config.n_interior_knots_time, degree=config.degree_time)
-    B_freq, knots_freq = create_bspline_basis(
-        freq_unit, config.n_interior_knots_freq, degree=config.degree_freq)
-    P_time = create_bspline_roughness_penalty(
-        knots_time, degree=config.degree_time, derivative_order=config.diff_order_time)
-    P_freq = create_bspline_roughness_penalty(
-        knots_freq, degree=config.degree_freq, derivative_order=config.diff_order_freq)
-    whitened = whiten_penalty_pair(P_time, P_freq)
-    basis_eig_time = B_time @ whitened["U_time"]
-    basis_eig_freq = B_freq @ whitened["U_freq"]
-
-    # Warm start: subtract the signal at theta_ref, fit the noise to the residual.
-    signal_ref = np.asarray(signal_fn(jnp.asarray(theta_ref)))
-    resid_ref = coeffs - signal_ref
-    pls_init = initialize_with_penalized_least_squares(
-        resid_ref**2, B_time, B_freq, P_time, P_freq, config)
-    init_sites = whitened_init_values(pls_init, whitened, config)
-    init_sites.update({"z_mc": 0.0, "z_tc": 0.0, "z_d": 0.0})
-
-    kernel = NUTS(_sobh_wdm_model, init_strategy=init_to_value(values=init_sites),
-                  max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob)
-    mcmc = MCMC(kernel, num_warmup=n_warmup, num_samples=n_samples,
-                num_chains=num_chains, chain_method="sequential", progress_bar=False)
-    mcmc.run(
-        random.PRNGKey(random_seed), jnp.asarray(coeffs), signal_fn,
-        jnp.asarray(theta_ref), jnp.asarray(theta_scale),
-        jnp.asarray(basis_eig_time), jnp.asarray(basis_eig_freq),
-        jnp.asarray(whitened["lam_time"]), jnp.asarray(whitened["lam_freq"]),
-        jnp.asarray(whitened["joint_null"]), config,
-        extra_fields=("diverging",))
-    samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
-    lp = samples["log_psd"]
-    return {
-        "mcmc": mcmc,
-        "samples": samples,
-        "time_grid": np.asarray(time_grid),
-        "freq_grid": np.asarray(freq_grid),
-        "Mc": samples["Mc"], "tc": samples["tc"], "dL": samples["dL"],
-        "psd_mean": np.exp(np.mean(lp, axis=0)),
-        "psd_lower": np.exp(np.percentile(lp, 5.0, axis=0)),
-        "psd_upper": np.exp(np.percentile(lp, 95.0, axis=0)),
-        "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
-    }
-
-
-def _wdm_dL_noise_model(coeffs, template, d_ref, ln_dl_ref, ln_dl_scale,
-                        basis_eig_time, basis_eig_freq, lam_time, lam_freq,
-                        joint_null, config):
-    """Distance-only SOBH signal + time-varying-noise WDM model.
-
-    The merger morphology (Mc, tc, ...) is fixed; only the luminosity distance is
-    inferred. Because the strain amplitude scales as ``1/dL``, the WDM signal is
-    exactly ``(d_ref / dL) * template`` for the precomputed WDM ``template`` at a
-    reference distance ``d_ref`` -- no waveform regeneration (and no fragile
-    ripple gradients) inside the sampler. The whitened P-spline noise surface is
-    sampled jointly, exactly as in :func:`_sobh_wdm_model`.
-    """
-    n_bt = basis_eig_time.shape[1]
-    n_bf = basis_eig_freq.shape[1]
-    z = numpyro.sample("z_d", dist.Normal(0.0, 1.0))
-    ln_dl = ln_dl_ref + ln_dl_scale * z
-    signal = (d_ref / jnp.exp(ln_dl)) * template
-    numpyro.deterministic("dL", jnp.exp(ln_dl))
-
-    phi_time = _sample_log_gamma("phi_time", config.alpha_phi, config.beta_phi,
-                                 config.phi_log_base_scale)
-    phi_freq = _sample_log_gamma("phi_freq", config.alpha_phi, config.beta_phi,
-                                 config.phi_log_base_scale)
-    d = phi_time * lam_time[:, None] + phi_freq * lam_freq[None, :]
-    scale = jnp.where(joint_null, 1.0 / jnp.sqrt(config.null_precision),
-                      1.0 / jnp.sqrt(d + config.ridge_eps))
-    with numpyro.plate("eig_coeffs", n_bt * n_bf):
-        s_flat = numpyro.sample("s", dist.Normal(0.0, 1.0))
-    log_psd = basis_eig_time @ (s_flat.reshape((n_bt, n_bf)) * scale) @ basis_eig_freq.T
-
-    resid = coeffs - signal
-    numpyro.factor("whittle", -0.5 * jnp.sum(log_psd + resid**2 * jnp.exp(-log_psd)))
-    numpyro.deterministic("log_psd", log_psd)
-
-
-def run_joint_dL_wdm_mcmc(
-    coeffs: np.ndarray,
-    time_grid: np.ndarray,
-    freq_grid: np.ndarray,
-    template: np.ndarray,
-    d_ref: float,
-    *,
-    config: PSplineConfig,
-    dl_ref: float,
-    dl_scale: float = 0.5,
-    n_warmup: int = 400,
-    n_samples: int = 600,
-    num_chains: int = 1,
-    random_seed: int = 7,
-    max_tree_depth: int = 10,
-    target_accept_prob: float = 0.9,
-) -> dict[str, object]:
-    """Distance-only joint fit: SOBH amplitude + time-varying noise PSD (WDM).
-
-    Args:
-        coeffs: WDM data coefficients ``(n_time, n_freq)`` on the trimmed grid.
-        time_grid, freq_grid: the trimmed analysis grid.
-        template: WDM coefficients of the responded waveform at distance ``d_ref``.
-        d_ref: reference distance of ``template`` (Mpc).
-        dl_ref: prior centre and PLS-init distance.
-    """
-    coeffs = np.asarray(coeffs, dtype=float)
-    template = np.asarray(template, dtype=float)
-
-    freq_unit = freq_grid / np.maximum(freq_grid[-1], 1e-12)
-    B_time, knots_time = create_bspline_basis(
-        time_grid, config.n_interior_knots_time, degree=config.degree_time)
-    B_freq, knots_freq = create_bspline_basis(
-        freq_unit, config.n_interior_knots_freq, degree=config.degree_freq)
-    P_time = create_bspline_roughness_penalty(
-        knots_time, degree=config.degree_time, derivative_order=config.diff_order_time)
-    P_freq = create_bspline_roughness_penalty(
-        knots_freq, degree=config.degree_freq, derivative_order=config.diff_order_freq)
-    whitened = whiten_penalty_pair(P_time, P_freq)
-    basis_eig_time = B_time @ whitened["U_time"]
-    basis_eig_freq = B_freq @ whitened["U_freq"]
-
-    signal_ref = (d_ref / dl_ref) * template
-    resid_ref = coeffs - signal_ref
-    pls_init = initialize_with_penalized_least_squares(
-        resid_ref**2, B_time, B_freq, P_time, P_freq, config)
-    init_sites = whitened_init_values(pls_init, whitened, config)
-    init_sites["z_d"] = 0.0
-
-    kernel = NUTS(_wdm_dL_noise_model, init_strategy=init_to_value(values=init_sites),
-                  max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob)
-    mcmc = MCMC(kernel, num_warmup=n_warmup, num_samples=n_samples,
-                num_chains=num_chains, chain_method="sequential", progress_bar=False)
-    nuts_t0 = time.perf_counter()
-    mcmc.run(
-        random.PRNGKey(random_seed), jnp.asarray(coeffs), jnp.asarray(template),
-        float(d_ref), float(np.log(dl_ref)), float(dl_scale),
-        jnp.asarray(basis_eig_time), jnp.asarray(basis_eig_freq),
-        jnp.asarray(whitened["lam_time"]), jnp.asarray(whitened["lam_freq"]),
-        jnp.asarray(whitened["joint_null"]), config,
-        extra_fields=("diverging", "accept_prob", "num_steps", "potential_energy"))
-    nuts_runtime_s = time.perf_counter() - nuts_t0
-    samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
-    lp = samples["log_psd"]
-    return {
-        "mcmc": mcmc,
-        "config": config,
-        "whitened": whitened,
-        "B_time": B_time,
-        "B_freq": B_freq,
-        "knots_time": knots_time,
-        "knots_freq": knots_freq,
-        "power": np.asarray(coeffs) ** 2,
-        "samples": samples,
-        "time_grid": np.asarray(time_grid),
-        "freq_grid": np.asarray(freq_grid),
-        "dL": samples["dL"],
-        "psd_mean": np.exp(np.mean(lp, axis=0)),
-        "psd_lower": np.exp(np.percentile(lp, 5.0, axis=0)),
-        "psd_upper": np.exp(np.percentile(lp, 95.0, axis=0)),
-        "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
-        "nuts_runtime_s": float(nuts_runtime_s),
-    }
-
-
 def _multichannel_joint_model(coeffs, templates, basis_eig_time, basis_eig_freq,
                               lam_time, lam_freq, joint_null, amp_scale, config):
     """Per-channel noise surfaces with one shared signal amplitude vector.
@@ -805,16 +205,21 @@ def _multichannel_joint_model(coeffs, templates, basis_eig_time, basis_eig_freq,
 
     total = 0.0
     for c in range(n_channels):
-        phi_time = _sample_log_gamma(f"phi_time_{c}", config.alpha_phi,
-                                     config.beta_phi, config.phi_log_base_scale)
-        phi_freq = _sample_log_gamma(f"phi_freq_{c}", config.alpha_phi,
-                                     config.beta_phi, config.phi_log_base_scale)
-        d = phi_time * lam_time[:, None] + phi_freq * lam_freq[None, :]
-        scale = jnp.where(joint_null, 1.0 / jnp.sqrt(config.null_precision),
-                          1.0 / jnp.sqrt(d + config.ridge_eps))
-        with numpyro.plate(f"eig_{c}", n_t * n_f):
-            s_flat = numpyro.sample(f"s_{c}", dist.Normal(0.0, 1.0))
-        log_psd = basis_eig_time @ (s_flat.reshape((n_t, n_f)) * scale) @ basis_eig_freq.T
+        phi_time = _sample_log_gamma(
+            f"phi_time_{c}", config.alpha_phi, config.beta_phi,
+            config.phi_log_base_scale,
+        )
+        phi_freq = _sample_log_gamma(
+            f"phi_freq_{c}", config.alpha_phi, config.beta_phi,
+            config.phi_log_base_scale,
+        )
+        scale = eigen_prior_scale(
+            phi_time, phi_freq, lam_time, lam_freq, joint_null, config
+        )
+        eig_coeffs = sample_eigen_coefficients(
+            f"s_{c}", scale, (n_t, n_f), config
+        )
+        log_psd = basis_eig_time @ eig_coeffs @ basis_eig_freq.T
         signal = jnp.tensordot(beta, templates[c], axes=1)
         resid = coeffs[c] - signal
         total = total - 0.5 * jnp.sum(log_psd + resid**2 * jnp.exp(-log_psd))
@@ -887,12 +292,14 @@ def run_multichannel_joint_mcmc(
         extra_fields=("diverging",))
 
     samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
-    psd_mean, psd_lower, psd_upper = [], [], []
+    log_psd_mean, psd_lower, psd_upper = [], [], []
     for c in range(n_channels):
         lp = samples[f"log_psd_{c}"]
-        psd_mean.append(np.exp(np.mean(lp, axis=0)))
+        log_psd_mean.append(np.mean(lp, axis=0))
         psd_lower.append(np.exp(np.percentile(lp, 5.0, axis=0)))
         psd_upper.append(np.exp(np.percentile(lp, 95.0, axis=0)))
+    log_psd_mean_array = np.stack(log_psd_mean)
+    psd_geometric_mean = np.exp(log_psd_mean_array)
     return {
         "mcmc": mcmc,
         "samples": samples,
@@ -900,7 +307,9 @@ def run_multichannel_joint_mcmc(
         "freq_grid": np.asarray(freq_grid),
         "beta_mean": samples["beta"].mean(axis=0),
         "beta_std": samples["beta"].std(axis=0),
-        "psd_mean": np.stack(psd_mean),
+        "log_psd_mean": log_psd_mean_array,
+        "psd_geometric_mean": psd_geometric_mean,
+        "psd_mean": psd_geometric_mean,  # Deprecated compatibility alias.
         "psd_lower": np.stack(psd_lower),
         "psd_upper": np.stack(psd_upper),
         "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),

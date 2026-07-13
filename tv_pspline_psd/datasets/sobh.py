@@ -3,7 +3,8 @@
 A massive/intermediate-mass black-hole binary sweeps a *diagonal chirp track*
 through the LISA time-frequency plane over the observation and (for the masses we
 use) coalesces within it. The merger epoch ``tc`` places that track against the
-**cyclostationary** Galactic-confusion noise of :mod:`datasets.lisa`, so the
+**cyclostationary** Galactic-confusion noise of
+:mod:`tv_pspline_psd.datasets.lisa`, so the
 source is measured against a noise floor that changes by several-fold over the
 year -- the time-variation our WDM estimator resolves and a stationary PSD does
 not. True stellar-mass (~30 Msun) systems sit at the top of the LISA band and
@@ -23,7 +24,8 @@ the time-dependent antenna patterns ``F+(t), Fx(t)``. The detector output is
 valid while the response varies slowly compared with the GW phase (the LW
 regime, good across most of the LISA band).
 
-FFT convention (matching :mod:`datasets.lisa_tdi`): for a real series of length
+FFT convention (matching :mod:`tv_pspline_psd.datasets.lisa_tdi`): for a real
+series of length
 ``n`` at spacing ``dt`` the continuous Fourier transform is ``h(f_k) = dt *
 rfft(x)_k`` and the one-sided PSD is ``S(f_k)``; ripple's ``h(f)`` is the
 continuous transform, embedded as ``rfft_k = h/dt``. The matched-filter SNR is
@@ -34,7 +36,7 @@ Requires the optional ``[lisa]`` extra (``uv pip install -e '.[lisa]'``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
