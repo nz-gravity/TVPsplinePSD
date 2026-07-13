@@ -71,21 +71,24 @@ def main() -> None:
     print(f"max |r| over lags 1-{MAX_LAG}: "
           f"time {np.abs(r_t).max():.4f}, freq {np.abs(r_f).max():.4f}")
 
-    fig, axes = plt.subplots(1, 2, figsize=(6.9, 2.4), constrained_layout=True,
-                             sharey=True)
-    for ax, r, ra, rs, label in ((axes[0], r_t, ra_t, rs_t, "time-bin lag"),
-                                 (axes[1], r_f, ra_f, rs_f,
-                                  "frequency-channel lag")):
-        ax.axhline(0, color="black", lw=0.7)
-        ax.axhspan(-3 * floor, 3 * floor, color="0.85", lw=0,
-                   label=r"$\pm 3/\sqrt{n}$")
-        ax.plot(lags, r, "o-", color="tab:blue", ms=3, label=r"$z$")
-        ax.plot(lags, ra, "s--", color="tab:orange", ms=3, label=r"$|z|$")
-        ax.plot(lags, rs, "^:", color="tab:green", ms=3,
-                label=r"$|z|$, per-channel studentised")
-        ax.set_xlabel(label)
-    axes[0].set_ylabel("autocorrelation")
-    axes[0].legend(fontsize=7)
+    # Single panel, z only: the |z| / studentised-|z| detail is quoted in the
+    # text (it is a fixed null-core footprint, not lag structure).
+    fig, ax = plt.subplots(figsize=(3.4, 2.2), constrained_layout=True)
+    ax.axhspan(-3 * floor, 3 * floor, color="0.92", lw=0,
+               label=r"$\pm 3/\sqrt{n}$")
+    ax.axhline(0, color="black", lw=0.7)
+    off = 0.12
+    for r, x0, color, mk, label in ((r_t, -off, "tab:blue", "o", "time-bin lag"),
+                                    (r_f, +off, "tab:orange", "s",
+                                     "frequency-channel lag")):
+        ml, sl, bl = ax.stem(lags + x0, r, basefmt=" ", label=label)
+        plt.setp(sl, color=color, lw=1.2)
+        plt.setp(ml, color=color, marker=mk, ms=4)
+    ax.set_xticks(lags)
+    ax.set_ylim(-0.01, 0.01)
+    ax.set_xlabel("lag")
+    ax.set_ylabel(r"autocorrelation of $z$")
+    ax.legend(fontsize=7)
 
     out = RESULTS_DIR / "tdi_z_autocorrelation.png"
     fig.savefig(out, dpi=200, bbox_inches="tight")

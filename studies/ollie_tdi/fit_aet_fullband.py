@@ -184,6 +184,9 @@ def main() -> None:
                              "(centered is the right geometry at this grid size)")
     parser.add_argument("--gaps", action="store_true",
                         help="inject LISA-like gaps (gate + taper, mask WDM bins)")
+    # 16 ~ the simulation study's knot-scaling rule round(8*(nt/24)^0.4) at
+    # nt=120; the old default 8 under-tracks the fast null-flank swings.
+    parser.add_argument("--time-knots", type=int, default=16)
     args = parser.parse_args()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     tag = f"{args.channel}_{args.data}"
@@ -231,6 +234,7 @@ def main() -> None:
     # Low trim puts the band edge at ~1e-4 Hz; 2 edge time bins cover the
     # Tukey taper and WDM wrap-around.
     config = PSplineConfig(
+        n_interior_knots_time=args.time_knots,
         n_interior_knots_freq=N_KNOTS_LOG + N_KNOTS_LIN,
         trim_low_freq_channels=trim_low,
         trim_time_bins=TRIM_TIME_BINS,
