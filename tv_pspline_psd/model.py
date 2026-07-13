@@ -141,7 +141,8 @@ def sample_eigen_coefficients(
 
 
 def pspline_surface_model(
-    coeffs: jnp.ndarray,
+    summed_power: jnp.ndarray,
+    counts: jnp.ndarray,
     basis_eig_time: jnp.ndarray,
     basis_eig_freq: jnp.ndarray,
     lam_time: jnp.ndarray,
@@ -158,9 +159,23 @@ def pspline_surface_model(
 
         -0.5 * ( R * log S + (sum_r c_r^2) / S ).
 
+    If ``S`` is constant over a block of ``m`` consecutive time bins (as in
+    time-binned coarse-graining), summing the block's power gives the identical
+    likelihood form with ``R -> m * R`` and the power summed over the block --
+    the block power is ``S`` times a ``chi^2_{mR}`` variate. ``summed_power`` and
+    ``counts`` already encode this: pass the raw per-cell ``sum_r c_r^2`` and
+    ``R`` for the unbinned likelihood, or block-summed power and ``m * R`` for
+    the coarse-grained one.
+
     Args:
-        coeffs: Real coefficients of shape ``(R, n_time, n_freq)``.
-        basis_eig_time: ``B_t U_t`` of shape ``(n_time, K_t)``.
+        summed_power: Per-cell (optionally time-block-summed) squared power
+            ``sum_r c_r^2``, shape ``(n_time, n_freq)`` (``n_time`` is the
+            number of time blocks when coarse-graining).
+        counts: Effective real-component count per cell, broadcastable to
+            ``summed_power``'s shape (``R`` unbinned, ``m_T * R`` for a
+            time block of ``m_T`` cells).
+        basis_eig_time: ``B_t U_t`` of shape ``(n_time, K_t)``, evaluated on
+            the same time grid as ``summed_power``/``counts``.
         basis_eig_freq: ``B_f U_f`` of shape ``(n_freq, K_f)``.
         lam_time: Eigenvalues of the time penalty, shape ``(K_t,)``.
         lam_freq: Eigenvalues of the frequency penalty, shape ``(K_f,)``.
@@ -186,10 +201,8 @@ def pspline_surface_model(
 
     log_psd = basis_eig_time @ eig_coeffs @ basis_eig_freq.T
 
-    n_components = coeffs.shape[0]
-    summed_power = jnp.sum(coeffs**2, axis=0)
     log_like = -0.5 * jnp.sum(
-        n_components * log_psd + summed_power * jnp.exp(-log_psd)
+        counts * log_psd + summed_power * jnp.exp(-log_psd)
     )
     numpyro.factor("whittle", log_like)
     if store_surface:

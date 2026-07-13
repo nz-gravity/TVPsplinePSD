@@ -35,6 +35,37 @@ from .splines import (
 from .vi import vi_warmstart
 
 
+def bin_power_time_axis(
+    power: np.ndarray,
+    time_grid: np.ndarray,
+    time_bin: int,
+    n_components: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Block-sum power/time along the time axis for likelihood coarse-graining.
+
+    The last block is ragged when ``time_grid.size`` is not a multiple of
+    ``time_bin``. Block time coordinates are the block mean of ``time_grid``.
+
+    Args:
+        power: Summed squared power per cell, shape ``(n_time, n_freq)``.
+        time_grid: Time coordinates, shape ``(n_time,)``.
+        time_bin: Number of consecutive time bins per block (``>= 1``).
+        n_components: Real components per cell (``R``), used to scale counts.
+
+    Returns:
+        ``(power_blocks, time_grid_blocks, counts_blocks)`` with
+        ``power_blocks``/``time_grid_blocks`` shape ``(n_blocks, ...)`` and
+        ``counts_blocks`` shape ``(n_blocks, 1)`` (``= block_size * R``,
+        summing to ``R * n_time`` over all blocks).
+    """
+    starts = np.arange(0, time_grid.size, time_bin)
+    block_sizes = np.minimum(time_bin, time_grid.size - starts)
+    power_blocks = np.add.reduceat(power, starts, axis=0)
+    time_grid_blocks = np.add.reduceat(time_grid, starts) / block_sizes
+    counts_blocks = block_sizes[:, None] * n_components
+    return power_blocks, time_grid_blocks, counts_blocks
+
+
 def fit_log_pspline_surface(
     coeffs: np.ndarray,
     time_grid: np.ndarray,
@@ -51,6 +82,7 @@ def fit_log_pspline_surface(
     vi_steps: int = 2000,
     vi_lr: float = 1e-2,
     progress_bar: bool = True,
+    time_bin: int = 1,
 ) -> dict[str, object]:
     """Fit a smooth ``log S(t, f)`` surface to real time-frequency coefficients.
 
@@ -68,6 +100,16 @@ def fit_log_pspline_surface(
         config: Estimator configuration.
         progress_bar: Show the NUTS (and VI warm-start) progress bar. Set False
             for quiet batch runs.
+        time_bin: Number of consecutive time bins to coarse-grain the *likelihood*
+            over (the last block may be ragged). Exact given block-constant ``S``:
+            each block's power is a ``chi^2`` sum of the same form as the
+            per-cell likelihood with the component count scaled by the block
+            size (see :func:`tv_pspline_psd.model.pspline_surface_model`). The
+            approximation error is the surface's within-block variation, which
+            is negligible once blocks are much narrower than the time-knot
+            spacing. Surface summaries/results are still reported on the full
+            (unbinned) ``time_grid``; only the likelihood evaluation grid
+            shrinks by ``~time_bin``. Default 1 (no binning).
 
     Returns:
         A results dict with the posterior PSD surface and summaries. Includes
@@ -93,6 +135,8 @@ def fit_log_pspline_surface(
         raise ValueError("time_grid and freq_grid must contain only finite values.")
     if np.any(np.diff(time_grid) <= 0) or np.any(np.diff(freq_grid) <= 0):
         raise ValueError("time_grid and freq_grid must be strictly increasing.")
+    if not isinstance(time_bin, (int, np.integer)) or isinstance(time_bin, bool) or time_bin < 1:
+        raise ValueError("time_bin must be a positive integer.")
     power = np.sum(coeffs**2, axis=0)  # summed squared components per cell
     freq_unit = freq_grid / np.maximum(freq_grid[-1], 1e-12)
 
@@ -123,16 +167,35 @@ def fit_log_pspline_surface(
     basis_eig_time = B_time @ whitened["U_time"]
     basis_eig_freq = B_freq @ whitened["U_freq"]
 
+    n_components = coeffs.shape[0]
+    if time_bin > 1:
+        # Block-sum the power along time so the likelihood is evaluated on
+        # ~n_time/time_bin blocks instead of the full grid (exact given a
+        # block-constant surface; see pspline_surface_model's docstring).
+        power_fit, time_grid_fit, counts_fit = bin_power_time_axis(
+            power, time_grid, time_bin, n_components
+        )
+        B_time_fit = evaluate_bspline_basis(
+            time_grid_fit, knots_time, degree=config.degree_time
+        )
+        basis_eig_time_fit = B_time_fit @ whitened["U_time"]
+    else:
+        power_fit = power
+        counts_fit = n_components
+        B_time_fit = B_time
+        basis_eig_time_fit = basis_eig_time
+
     # The warm start fits log S to the per-component mean power, matching the
-    # likelihood mode (S = mean of squared components).
+    # likelihood mode (S = mean of squared components), on the fit grid.
     pls_init = initialize_with_penalized_least_squares(
-        power / coeffs.shape[0], B_time, B_freq, P_time, P_freq, config
+        power_fit / counts_fit, B_time_fit, B_freq, P_time, P_freq, config
     )
     init_sites = whitened_init_values(pls_init, whitened, config)
 
     model_args = (
-        jnp.asarray(coeffs),
-        jnp.asarray(basis_eig_time),
+        jnp.asarray(power_fit),
+        jnp.asarray(counts_fit),
+        jnp.asarray(basis_eig_time_fit),
         jnp.asarray(basis_eig_freq),
         jnp.asarray(whitened["lam_time"]),
         jnp.asarray(whitened["lam_freq"]),
@@ -216,11 +279,15 @@ def fit_log_pspline_surface(
             None if vi_log_psd is None else np.exp(np.asarray(vi_log_psd))
         ),
         "vi_psd_mean": None if vi_log_psd is None else np.exp(np.asarray(vi_log_psd)),
-        "provenance": provenance(
-            seed=random_seed,
-            config=config,
-            source_data={"shape": list(coeffs.shape)},
-        ),
+        "time_bin": int(time_bin),
+        "provenance": {
+            **provenance(
+                seed=random_seed,
+                config=config,
+                source_data={"shape": list(coeffs.shape)},
+            ),
+            "time_bin": int(time_bin),
+        },
     }
 
 
