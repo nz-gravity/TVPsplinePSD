@@ -59,8 +59,23 @@ TANG_M, TANG_THIN = 16, 2
 U_COMMON = np.linspace(0.05, 0.95, 60)
 F_COMMON = np.linspace(0.6, 4.4, 60)
 
-WDM_CONFIG = PSplineConfig(n_interior_knots_time=8, n_interior_knots_freq=10)
-TANG_CONFIG = PSplineConfig(n_interior_knots_time=8, n_interior_knots_freq=6)
+NF_KNOTS_WDM, NF_KNOTS_TANG = 10, 6
+
+
+def _time_knots(nt: int) -> int:
+    """Interior time knots growing as nt^{2/5} (anchored at 8 for nt=24).
+
+    Only the time axis gains data as n grows (nf is fixed), so a fixed basis
+    leaves a residual smoothing bias that the contracting credible intervals
+    stop covering; growing the knot count with n restores nominal coverage.
+    """
+    return round(8 * (nt / 24) ** 0.4)
+
+
+def _configs(nt: int) -> tuple[PSplineConfig, PSplineConfig]:
+    kt = _time_knots(nt)
+    return (PSplineConfig(n_interior_knots_time=kt, n_interior_knots_freq=NF_KNOTS_WDM),
+            PSplineConfig(n_interior_knots_time=kt, n_interior_knots_freq=NF_KNOTS_TANG))
 
 
 def _tang_calibration() -> float:
@@ -78,11 +93,12 @@ def _to_common(time_grid, freq_grid, log_field):
 # Two chains of 500/500: single 250-draw chains leave rhat(phi) ~ 1.1 at the
 # largest durations, and sampling is <1 s per fit so the longer chains are free.
 def _fit_both(data, nt, seed, cal_wdm, cal_tang):
-    rw = run_wdm_psd_mcmc(data, dt=DT, nt=nt, config=WDM_CONFIG,
+    cfg_wdm, cfg_tang = _configs(nt)
+    rw = run_wdm_psd_mcmc(data, dt=DT, nt=nt, config=cfg_wdm,
                           n_warmup=500, n_samples=500, num_chains=2,
                           random_seed=seed)
     rt = run_tang_dynamic_whittle_mcmc(data, dt=DT, m=TANG_M, thin=TANG_THIN,
-                                       config=TANG_CONFIG, n_warmup=500,
+                                       config=cfg_tang, n_warmup=500,
                                        n_samples=500, num_chains=2,
                                        random_seed=seed)
     return rw, rt
@@ -249,7 +265,7 @@ def main() -> None:
     # --- Figure 1: single-realization triptych at the largest duration ---
     if not args.skip_fig1:
         nt0 = NT_VALUES[-1]
-        cal_wdm0 = wdm_white_noise_calibration(nt0 * NF, DT, nt0, WDM_CONFIG)
+        cal_wdm0 = wdm_white_noise_calibration(nt0 * NF, DT, nt0, _configs(nt0)[0])
         data0 = simulate_ls2(nt0 * NF, rng=np.random.default_rng(0))
         rw0, rt0 = _fit_both(data0, nt0, 0, cal_wdm0, cal_tang)
         panels = [
@@ -280,7 +296,7 @@ def main() -> None:
     div_total = 0
     for nt in args.nt:
         n_total = nt * NF
-        cal_wdm = wdm_white_noise_calibration(n_total, DT, nt, WDM_CONFIG)
+        cal_wdm = wdm_white_noise_calibration(n_total, DT, nt, _configs(nt)[0])
         rep = {k: [] for k in METRIC_KEYS}
         t0 = time.time()
         for r in range(args.repeats):

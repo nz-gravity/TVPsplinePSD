@@ -6,8 +6,8 @@ source -- a burst, or the final days of a massive-black-hole-binary inspiral --
 accumulates its SNR at one epoch and is measured against the noise *there*, which
 the cyclostationary Galactic foreground swings by ~7x over the year.
 
-We model the source's complex amplitude in its frequency channel over time (the
-phase-retaining STFT front end of Sec.~3):
+For this source-only benchmark we model its complex amplitude directly in one
+localized frequency channel over time:
 
     c_n = A exp(i[phi0 + 2 pi df t_n]) W(u_n) + noise_n,   noise_n ~ CN(0, S(u_n,f0))
 
@@ -44,7 +44,7 @@ from tv_pspline_psd import save_figure, set_paper_style  # noqa: E402
 FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
 _YEAR = 365.25 * 86400.0
 F0 = 1.5e-3
-NT = 512          # STFT segments over the year
+NT = 512          # localized time bins over the year
 TAU = 8.0         # transient envelope width, in segments
 SNR = 16.0        # optimal SNR against the true local noise
 PHI0_TRUE = 0.6

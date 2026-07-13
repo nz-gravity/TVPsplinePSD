@@ -1,0 +1,71 @@
+\subsection{WDM and moving-periodogram domains}
+\label{sec:representations}
+
+Both analyses fit the same tensor-product P-spline representation of
+$\log S(t,f)$; they differ only in the observations supplied to the likelihood
+(Fig.~\ref{fig:representations}).  We display the common domain using normalised
+time $u=t/T\in[0,1]$ and normalised frequency
+$f/f_{\mathrm{Nyq}}\in[0,1]$, where $f_{\mathrm{Nyq}}=1/(2\Delta t)$.
+These axes describe the parent physical domain; the fitted WDM grid may exclude
+boundary time bins and low- or high-frequency channels according to the
+configured trims.  The WDM transform gives a critically sampled,
+near-orthogonal tiling of the time--frequency plane with one real coefficient
+per cell,
+\begin{equation}
+  w_{nm}\mid S_{nm}\sim\mathcal N(0,S_{nm}).
+\end{equation}
+This regular tiling uses the complete data record and localizes a disturbance in
+both time and frequency.  For locally stationary coloured noise, treating the
+coefficients as conditionally independent is an approximation whose adequacy
+must be checked through the whitened residuals.
+
+The Tang dynamic-Whittle construction instead considers a centred local DFT of
+$2m+1$ real samples.  Its $2m+1$ outputs comprise one DC bin, $m$ positive-frequency
+bins, and $m$ conjugate negative-frequency bins.  The construction evaluates
+and retains only one positive-frequency bin at each window centre.  Its index is
+$j(t)=1+[(t-1)\bmod m]$: thus the highlighted $f_3$ in
+Fig.~\ref{fig:representations} is merely the example centre for which $j(t)=3$.
+The selected bin cycles through $f_1,\ldots,f_m$, producing a diagonal block in the candidate
+time--frequency grid.  Retained blocks begin $im$ window centres apart: after
+the $m$ retained centres in one block, the intervening $(i-1)m$ centres are not
+evaluated.  Because the local window must remain inside the record and only
+positive-frequency bins are used, the retained Tang ordinates lie in the
+interior $0<u<1$ and $0<f/f_{\mathrm{Nyq}}<1$.  Each retained squared Fourier
+magnitude is modelled by the exponential Whittle likelihood
+\begin{equation}
+  I_t\mid S(t,f_t)\sim\operatorname{Exp}\!\left[
+  \operatorname{mean}=S(t,f_t)\right].
+\end{equation}
+The cycling scheme covers the evolving spectrum without constructing a dense
+periodogram at every time, while thinning limits the redundancy caused by
+overlapping local windows.
+
+Neither representation makes its finite-sample observations exactly
+independent.  In the moving-periodogram analysis, approximate independence
+follows from local stationarity, Fourier orthogonality, and thinning; in the WDM
+analysis it follows from the near-diagonalization of a locally stationary
+covariance by the wavelet transform.  We therefore regard agreement between the
+two domains, together with representation-specific whitening checks, as a
+robustness test rather than privileging either diagonal likelihood as exact.
+The WDM localization is particularly useful in the presence of gaps, whereas a
+gap can contaminate every Fourier ordinate whose $2m+1$ window intersects it.
+
+\begin{figure}
+  \centering
+  \includegraphics[width=\linewidth]{representation_schematic.pdf}
+  \caption{The two observation domains on
+  $(u,f/f_{\mathrm{Nyq}})\in[0,1]^2$.  WDM produces a regular,
+  critically sampled tiling with one real coefficient per
+  $\Delta T\times\Delta F$ cell (left); configurable boundary trims are applied
+  before fitting.  A real $2m+1$-sample local DFT contains
+  DC, $m$ positive-frequency bins, and their $m$ conjugate partners.  Tang
+  retains the single positive-frequency bin $f_{j(t)}$, cycling from $f_1$ to
+  $f_m$ over $m$ successive window centres.  Retained blocks start $im$ centres
+  apart, leaving $(i-1)m$ centres unevaluated (right).  Pale cells in the Tang
+  panel denote candidate locations only; the implementation evaluates the
+  highlighted ordinate directly rather than constructing a dense periodogram.
+  The diagonal likelihoods
+  in both domains are local-stationarity approximations, not claims of exact
+  finite-sample independence.}
+  \label{fig:representations}
+\end{figure}
