@@ -178,8 +178,6 @@ def main() -> None:
     parser.add_argument("--n-warmup", type=int, default=300)
     parser.add_argument("--n-samples", type=int, default=300)
     parser.add_argument("--num-chains", type=int, default=2)
-    parser.add_argument("--use-vi", action="store_true",
-                        help="refine the warm start with VI before NUTS")
     parser.add_argument("--non-centered", action="store_true",
                         help="use the package's default non-centered prior "
                              "(centered is the right geometry at this grid size)")
@@ -258,7 +256,7 @@ def main() -> None:
     res = fit_log_pspline_surface(
         coeffs[None, :, :], time_grid, warp_freq(freq_grid), config=config,
         n_warmup=args.n_warmup, n_samples=args.n_samples,
-        num_chains=args.num_chains, random_seed=0, use_vi=args.use_vi,
+        num_chains=args.num_chains, random_seed=0,
     )
     total_s = time.perf_counter() - t0
     diag = summarize_mcmc_diagnostics(res)

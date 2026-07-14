@@ -169,8 +169,8 @@ def main() -> None:
     # steepest flank of the 0.06 Hz null. Spline-free 3-day chunked Welch
     # power vs the fitted TV band vs the stationary (time-averaged) level.
     tg_days = fits["ungapped"]["time_grid_days"]
-    S_lo = fits["ungapped"]["psd_lower"] * cal[None, :] / (2.0 * dt)
-    S_hi = fits["ungapped"]["psd_upper"] * cal[None, :] / (2.0 * dt)
+    S_lo = fits["ungapped"]["psd_lower"] * cal[None, :] / (2.0 * dt)  # noqa: F841
+    S_hi = fits["ungapped"]["psd_upper"] * cal[None, :] / (2.0 * dt)  # noqa: F841
     win = (fg_u > 0.055) & (fg_u < 0.065)
     swing = S_tv[:, win].max(axis=0) / S_tv[:, win].min(axis=0)
     jbest = np.where(win)[0][np.argmax(swing)]
@@ -202,13 +202,16 @@ def main() -> None:
     ax.errorbar(t_c, pc / np.median(pc), yerr=rel * pc / np.median(pc),
                 fmt="o", ms=3, mfc="none", color="0.25", lw=0.9,
                 label="chunked Welch (3 d)")
-    # Arm-length prediction of the power trajectory: shift the raw full-run
-    # Welch spectrum by the recorded arm breathing, S(t, f) = W(f Lbar(t)/L0),
-    # no free parameters (cf. verify_aet_fit).
+    # Arm-length prediction of the power trajectory: shift the full-run Welch
+    # spectrum by the recorded arm breathing, S(t, f) = W(f Lbar(t)/L0), no
+    # free parameters (cf. verify_aet_fit). A ~15-bin (~1.5e-5 Hz) boxcar
+    # removes the raw spectrum's per-bin estimator noise while leaving the
+    # ~1e-4 Hz flank shape intact.
     W_f, W_S = fits["ungapped"]["welch_f"], fits["ungapped"]["welch_psd"]
+    W_Ss = np.convolve(np.log(W_S[1:]), np.ones(15) / 15, mode="same")
     lam_c = np.interp(t_c, t_L, L_bar / L_bar[0])
     pred = np.exp(np.mean([np.interp(np.log(fg_u[j] * lam_c), np.log(W_f[1:]),
-                                     np.log(W_S[1:])) for j in group], axis=0))
+                                     W_Ss) for j in group], axis=0))
     ax.plot(t_c, pred / np.median(pred), "--", color="black", lw=0.9,
             label="arm-length prediction")
     Sg = S_tv[:, group].mean(axis=1)

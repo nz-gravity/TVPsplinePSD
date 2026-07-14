@@ -58,10 +58,10 @@ def save_figure(fig: plt.Figure, path: str | Path, *, dpi: int = 160) -> Path:
 def quicklook(idata, *, path: str | Path | None = None) -> plt.Figure | Path:
     """One-glance summary of a saved fit (see :mod:`tv_pspline_psd.io`).
 
-    Builds a self-contained matplotlib figure -- scalar-parameter trace plots, the
-    VI ELBO loss (if present) and the regenerated posterior-mean PSD surface --
-    straight from the stored sites, so no per-sample surface needs to have been
-    kept. ``idata`` may be a NetCDF path or a loaded ``InferenceData``.
+    Builds a self-contained matplotlib figure with scalar-parameter trace plots
+    and the regenerated posterior-mean PSD surface, straight from the stored
+    sites, so no per-sample surface needs to have been kept. ``idata`` may be a
+    NetCDF path or a loaded ``InferenceData``.
 
     Args:
         idata: Path to a saved ``.nc`` or a loaded ArviZ tree.
@@ -80,13 +80,10 @@ def quicklook(idata, *, path: str | Path | None = None) -> plt.Figure | Path:
         if set(post[v].dims) <= {"chain", "draw"}
     ]
     surf = surface_from_idata(idata)
-    has_vi = "vi" in idata.children
 
     n_trace = len(scalar_vars)
-    n_extra = 1 + int(has_vi)  # surface + optional loss
-    fig, axes = plt.subplots(
-        1, n_trace + n_extra, figsize=(3.2 * (n_trace + n_extra), 3.0)
-    )
+    n_cols = n_trace + 1  # trace panels plus the surface
+    fig, axes = plt.subplots(1, n_cols, figsize=(3.2 * n_cols, 3.0))
     axes = np.atleast_1d(axes)
 
     for ax, name in zip(axes, scalar_vars):
@@ -96,31 +93,18 @@ def quicklook(idata, *, path: str | Path | None = None) -> plt.Figure | Path:
         ax.set_title(name)
         ax.set_xlabel("draw")
 
-    col = n_trace
-    if has_vi:
-        loss = np.asarray(idata["vi"].dataset["loss"].values)
-        axes[col].plot(loss, color="tab:purple", lw=1.0)
-        axes[col].set_title("VI ELBO loss")
-        axes[col].set_xlabel("step")
-        axes[col].set_yscale(
-            "log" if np.all(loss > 0) else "linear"
-        )
-        col += 1
-
-    mesh = axes[col].pcolormesh(
+    mesh = axes[n_trace].pcolormesh(
         surf["time_grid"], surf["freq_grid"], surf["log_psd_mean"].T, shading="auto"
     )
-    axes[col].set_title("posterior-mean log PSD")
-    axes[col].set_xlabel("time")
-    axes[col].set_ylabel("frequency")
-    fig.colorbar(mesh, ax=axes[col], fraction=0.046)
+    axes[n_trace].set_title("posterior-mean log PSD")
+    axes[n_trace].set_xlabel("time")
+    axes[n_trace].set_ylabel("frequency")
+    fig.colorbar(mesh, ax=axes[n_trace], fraction=0.046)
 
     attrs = idata.attrs
     bits = [f"div={attrs.get('divergences', '?')}"]
     if attrs.get("nuts_runtime_s") is not None:
         bits.append(f"NUTS {attrs['nuts_runtime_s']:.1f}s")
-    if attrs.get("vi_runtime_s") is not None:
-        bits.append(f"VI {attrs['vi_runtime_s']:.1f}s")
     if attrs.get("mse_nuts") is not None:
         bits.append(f"MSE {attrs['mse_nuts']:.3f}")
     fig.suptitle("  |  ".join(bits), fontsize=10)

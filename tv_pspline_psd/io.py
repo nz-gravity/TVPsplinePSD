@@ -4,7 +4,7 @@ Only the tiny posterior sites (``s``, ``phi_time``, ``phi_freq``) are stored -- 
 ``log S(t, f)`` surface is regenerated from them on demand. With the whitening
 matrices and eigen-bases kept in ``constant_data``, the full posterior surface
 (mean and credible interval) is reconstructed exactly, so a saved run supports
-trace plots, divergence diagnostics, loss plots, and surface replots from a file
+trace plots, divergence diagnostics, and surface replots from a file
 that is megabytes rather than gigabytes.
 
 Layout of the saved tree:
@@ -13,9 +13,8 @@ Layout of the saved tree:
 * ``sample_stats`` -- ``diverging``, ``acceptance_rate``, ``n_steps``, ``lp``.
 * ``constant_data`` -- grids, knots, eigen-bases, whitening (everything needed to
   rebuild the surface) plus ``power`` and an optional ``true_psd``.
-* ``vi`` -- ELBO ``loss`` trace and the VI point-estimate sites (when VI was run).
-* root ``attrs`` -- ``config`` (JSON), ``nuts_runtime_s``, ``vi_runtime_s``,
-  ``mse_nuts``, ``vi_mse``, ``divergences``.
+* root ``attrs`` -- ``config`` (JSON), ``nuts_runtime_s``, ``mse_nuts``, and
+  ``divergences``.
 """
 
 from __future__ import annotations
@@ -50,7 +49,7 @@ def results_to_idata(
         results: The dict returned by ``fit_log_pspline_surface`` /
             ``run_wdm_psd_mcmc``.
         true_psd: Optional ground-truth PSD on the analysis grid; if given it is
-            stored and used to record ``mse_nuts`` / ``vi_mse``.
+            stored and used to record ``mse_nuts``.
     """
     mcmc = results["mcmc"]
     whitened = results["whitened"]
@@ -81,25 +80,29 @@ def results_to_idata(
         "joint_null": (("eig_time", "eig_freq"), np.asarray(whitened["joint_null"])),
         "power": (("time", "freq"), np.asarray(results["power"])),
     }
+    # New explicit-knot fits retain the historical normalized ``knots_freq``
+    # for reconstruction compatibility and also persist the user-facing grid
+    # coordinates. Older result dictionaries simply omit these optional vars.
+    if "knots_time_physical" in results:
+        const["knots_time_physical"] = (
+            "knot_time", np.asarray(results["knots_time_physical"])
+        )
+    if "knots_freq_physical" in results:
+        const["knots_freq_physical"] = (
+            "knot_freq", np.asarray(results["knots_freq_physical"])
+        )
     if true_psd is not None:
         const["true_psd"] = (("time", "freq"), np.asarray(true_psd))
     idata["constant_data"] = xr.Dataset(const)
-
-    if results.get("vi_losses") is not None:
-        vi_vars = {"loss": ("vi_step", np.asarray(results["vi_losses"]))}
-        idata["vi"] = xr.Dataset(vi_vars)
 
     attrs: dict[str, object] = {
         "config": json.dumps(asdict(config)),
         "provenance": json.dumps(results.get("provenance", provenance(config=config))),
         "nuts_runtime_s": _as_float(results.get("nuts_runtime_s")),
-        "vi_runtime_s": _as_float(results.get("vi_runtime_s")),
         "divergences": int(results.get("divergences", 0)),
     }
     if true_psd is not None:
         attrs["mse_nuts"] = mse_log_psd(true_psd, np.asarray(results["psd_mean"]))
-        if results.get("vi_psd_mean") is not None:
-            attrs["vi_mse"] = mse_log_psd(true_psd, np.asarray(results["vi_psd_mean"]))
     idata.attrs.update({k: v for k, v in attrs.items() if v is not None})
     return idata
 

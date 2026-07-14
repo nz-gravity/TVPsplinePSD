@@ -10,7 +10,6 @@ dependencies = [
     "jax>=0.10.1",
     "matplotlib>=3.11.0",
     "numpyro>=0.21.0",
-    "optax>=0.2.8",
     "scipy>=1.13",
     "wdm-transform>=0.5.0",
     "arviz-stats>=1.2.0",

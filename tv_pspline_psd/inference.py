@@ -32,7 +32,6 @@ from .splines import (
     create_bspline_roughness_penalty,
     evaluate_bspline_basis,
 )
-from .vi import vi_warmstart
 
 
 def fit_log_pspline_surface(
@@ -41,15 +40,14 @@ def fit_log_pspline_surface(
     freq_grid: np.ndarray,
     *,
     config: PSplineConfig,
+    interior_knots_time: np.ndarray | None = None,
+    interior_knots_freq: np.ndarray | None = None,
     n_warmup: int = 250,
     n_samples: int = 300,
     num_chains: int = 1,
     random_seed: int = 7,
     max_tree_depth: int = 10,
     target_accept_prob: float = 0.85,
-    use_vi: bool = False,
-    vi_steps: int = 2000,
-    vi_lr: float = 1e-2,
     progress_bar: bool = True,
 ) -> dict[str, object]:
     """Fit a smooth ``log S(t, f)`` surface to real time-frequency coefficients.
@@ -66,12 +64,15 @@ def fit_log_pspline_surface(
         time_grid: Rescaled time coordinates in ``[0, 1]``, shape ``(n_time,)``.
         freq_grid: Frequencies (Hz) of each channel, shape ``(n_freq,)``.
         config: Estimator configuration.
-        progress_bar: Show the NUTS (and VI warm-start) progress bar. Set False
-            for quiet batch runs.
+        interior_knots_time: Optional explicit interior time knots, in the same
+            coordinates as ``time_grid``. These override adaptive time knots.
+        interior_knots_freq: Optional explicit interior frequency knots in Hz.
+            The fit still uses an internally normalized frequency coordinate.
+        progress_bar: Show the NUTS progress bar. Set False for quiet batch runs.
 
     Returns:
-        A results dict with the posterior PSD surface and summaries. Includes
-        ``nuts_runtime_s`` and (when ``use_vi``) ``vi_runtime_s`` wall-clock times.
+        A results dict with the posterior PSD surface and summaries, including
+        the ``nuts_runtime_s`` wall-clock time.
     """
     coeffs = np.asarray(coeffs, dtype=float)
     time_grid = np.asarray(time_grid, dtype=float)
@@ -94,25 +95,18 @@ def fit_log_pspline_surface(
     if np.any(np.diff(time_grid) <= 0) or np.any(np.diff(freq_grid) <= 0):
         raise ValueError("time_grid and freq_grid must be strictly increasing.")
     power = np.sum(coeffs**2, axis=0)  # summed squared components per cell
-    freq_unit = freq_grid / np.maximum(freq_grid[-1], 1e-12)
-
-    time_interior_knots = None
-    if config.adaptive_time_knots:
-        pilot = np.mean(np.log(power + power_floor(power)), axis=1)
-        time_interior_knots = create_adaptive_time_knots(
-            time_grid, pilot,
-            n_interior_knots=config.n_interior_knots_time,
-            smoothing_sigma=config.adaptive_time_knot_smoothing,
-            variation_floor=config.adaptive_time_knot_floor,
-        )
-
-    B_time, knots_time = create_bspline_basis(
-        time_grid, config.n_interior_knots_time, degree=config.degree_time,
-        interior_knots=time_interior_knots,
+    spline = _prepare_spline_bases(
+        power,
+        time_grid,
+        freq_grid,
+        config,
+        interior_knots_time=interior_knots_time,
+        interior_knots_freq=interior_knots_freq,
     )
-    B_freq, knots_freq = create_bspline_basis(
-        freq_unit, config.n_interior_knots_freq, degree=config.degree_freq
-    )
+    B_time = spline["B_time"]
+    B_freq = spline["B_freq"]
+    knots_time = spline["knots_time"]
+    knots_freq = spline["knots_freq_unit"]
     P_time = create_bspline_roughness_penalty(
         knots_time, degree=config.degree_time, derivative_order=config.diff_order_time
     )
@@ -140,25 +134,6 @@ def fit_log_pspline_surface(
         config,
         False,  # never store the per-sample log_psd surface; reconstruct instead
     )
-    vi_losses = None
-    vi_log_psd = None
-    vi_runtime_s = None
-    if use_vi:
-        # Refine the PLS init with a diagonal-guide VI pass before NUTS.
-        vi_key, _ = random.split(random.PRNGKey(random_seed))
-        vi_t0 = time.perf_counter()
-        init_sites, vi_losses = vi_warmstart(
-            pspline_surface_model, model_args, init_sites,
-            rng_key=vi_key, steps=vi_steps, lr=vi_lr, progress_bar=progress_bar,
-        )
-        vi_runtime_s = time.perf_counter() - vi_t0
-        # Reconstruct the VI point-estimate surface from the refined sites.
-        vi_eig = reconstruct_eig_coeff_samples(
-            {k: np.asarray(init_sites[k])[None] for k in ("s", "phi_time", "phi_freq")},
-            whitened, config,
-        )[0]
-        vi_log_psd = basis_eig_time @ vi_eig @ basis_eig_freq.T
-
     kernel = NUTS(
         pspline_surface_model,
         init_strategy=init_to_value(values=init_sites),
@@ -193,6 +168,12 @@ def fit_log_pspline_surface(
         "freq_grid": np.asarray(freq_grid),
         "knots_time": knots_time,
         "knots_freq": knots_freq,
+        # ``knots_freq`` is retained in its historical normalized coordinate
+        # for saved-run compatibility. The explicit physical vectors remove
+        # ambiguity for callers selecting knots in Hz.
+        "knots_time_physical": spline["knots_time_physical"],
+        "knots_freq_physical": spline["knots_freq_physical"],
+        "knots_freq_unit": knots_freq,
         "B_time": B_time,
         "B_freq": B_freq,
         "whitened": whitened,
@@ -209,18 +190,100 @@ def fit_log_pspline_surface(
         "psd_upper": np.exp(log_upper),
         "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
         "nuts_runtime_s": float(nuts_runtime_s),
-        "vi_runtime_s": None if vi_runtime_s is None else float(vi_runtime_s),
-        "vi_losses": None if vi_losses is None else np.asarray(vi_losses),
-        "vi_log_psd": None if vi_log_psd is None else np.asarray(vi_log_psd),
-        "vi_psd_geometric_mean": (
-            None if vi_log_psd is None else np.exp(np.asarray(vi_log_psd))
-        ),
-        "vi_psd_mean": None if vi_log_psd is None else np.exp(np.asarray(vi_log_psd)),
         "provenance": provenance(
             seed=random_seed,
             config=config,
             source_data={"shape": list(coeffs.shape)},
         ),
+    }
+
+
+def _validate_explicit_interior_knots(
+    knots: np.ndarray | None,
+    grid: np.ndarray,
+    expected_count: int,
+    *,
+    axis: str,
+) -> np.ndarray | None:
+    """Validate explicit knots before basis construction or sampler startup."""
+    if knots is None:
+        return None
+    knots = np.asarray(knots, dtype=float)
+    if knots.ndim != 1:
+        raise ValueError(f"interior_knots_{axis} must be one-dimensional.")
+    if knots.size != expected_count:
+        raise ValueError(
+            f"interior_knots_{axis} must contain exactly {expected_count} values "
+            f"to match config.n_interior_knots_{axis}."
+        )
+    if not np.isfinite(knots).all():
+        raise ValueError(f"interior_knots_{axis} must contain only finite values.")
+    if np.any(np.diff(knots) <= 0):
+        raise ValueError(f"interior_knots_{axis} must be strictly increasing.")
+    if np.any(knots <= grid[0]) or np.any(knots >= grid[-1]):
+        unit = " Hz" if axis == "freq" else ""
+        raise ValueError(
+            f"interior_knots_{axis} must lie strictly inside the analysis-grid "
+            f"range ({grid[0]:g}, {grid[-1]:g}){unit}."
+        )
+    return knots
+
+
+def _prepare_spline_bases(
+    power: np.ndarray,
+    time_grid: np.ndarray,
+    freq_grid: np.ndarray,
+    config: PSplineConfig,
+    *,
+    interior_knots_time: np.ndarray | None = None,
+    interior_knots_freq: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    """Build production bases while accepting explicit knots in grid units."""
+    explicit_time = _validate_explicit_interior_knots(
+        interior_knots_time,
+        time_grid,
+        config.n_interior_knots_time,
+        axis="time",
+    )
+    explicit_freq = _validate_explicit_interior_knots(
+        interior_knots_freq,
+        freq_grid,
+        config.n_interior_knots_freq,
+        axis="freq",
+    )
+    selected_time = explicit_time
+    if selected_time is None and config.adaptive_time_knots:
+        pilot = np.mean(np.log(power + power_floor(power)), axis=1)
+        selected_time = create_adaptive_time_knots(
+            time_grid,
+            pilot,
+            n_interior_knots=config.n_interior_knots_time,
+            smoothing_sigma=config.adaptive_time_knot_smoothing,
+            variation_floor=config.adaptive_time_knot_floor,
+        )
+
+    freq_scale = np.maximum(freq_grid[-1], 1e-12)
+    freq_unit = freq_grid / freq_scale
+    explicit_freq_unit = None if explicit_freq is None else explicit_freq / freq_scale
+    B_time, knots_time = create_bspline_basis(
+        time_grid,
+        config.n_interior_knots_time,
+        degree=config.degree_time,
+        interior_knots=selected_time,
+    )
+    B_freq, knots_freq_unit = create_bspline_basis(
+        freq_unit,
+        config.n_interior_knots_freq,
+        degree=config.degree_freq,
+        interior_knots=explicit_freq_unit,
+    )
+    return {
+        "B_time": B_time,
+        "B_freq": B_freq,
+        "knots_time": knots_time,
+        "knots_freq_unit": knots_freq_unit,
+        "knots_time_physical": knots_time.copy(),
+        "knots_freq_physical": knots_freq_unit * freq_scale,
     }
 
 

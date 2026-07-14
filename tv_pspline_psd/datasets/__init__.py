@@ -16,21 +16,19 @@ from .lisa_tdi import (
     LISANoiseConfig,
     digman_cornish_power_modulation,
     galactic_modulation,
+    gb_tdi_signal,
     lisa_galactic_confusion_psd,
     lisa_instrument_psd,
-    normalization_constant,
-    simulate_tv_lisa_noise,
-    true_psd_lisa,
-        gb_tdi_signal,
     lisa_tdi_confusion_psd,
     lisa_tdi_noise_psd,
+    normalization_constant,
     optimal_snr,
+    simulate_tv_lisa_noise,
     simulate_tv_lisa_tdi,
+    true_psd_lisa,
     true_tv_lisa_tdi_psd,
 )
-
 from .ls2 import simulate_ls2, true_psd_ls2
-
 
 __all__ = [
     "simulate_ls2",

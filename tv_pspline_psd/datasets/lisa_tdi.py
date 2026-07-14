@@ -41,8 +41,8 @@ envelope is ``m(u) = sqrt(r(t))`` with ``<m^2> = <r> = 1`` over whole years.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import numpy as np
 
+import numpy as np
 
 _GB_PARAM_ORDER = ("f0", "fdot", "A", "ra", "dec", "psi", "iota", "phi0")
 _SEC_PER_YEAR = 365.25 * 86400.0

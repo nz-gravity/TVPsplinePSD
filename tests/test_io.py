@@ -23,22 +23,23 @@ def test_save_load_regenerates_surface(tmp_path):
     )
     res = run_wdm_psd_mcmc(
         data, dt=0.1, nt=24, config=config,
-        n_warmup=10, n_samples=10, random_seed=0, use_vi=True, vi_steps=50,
+        n_warmup=10, n_samples=10, random_seed=0,
     )
     # The per-sample surface must never be stored -- only the tiny sites are kept.
     assert "log_psd" not in res["samples"]
     assert isinstance(res["nuts_runtime_s"], float)
-    assert isinstance(res["vi_runtime_s"], float)
 
     true_psd = np.ones_like(res["psd_mean"])
     path = save_run(res, tmp_path / "run.nc", true_psd=true_psd)
     assert path.stat().st_size < 5_000_000  # small artifact
 
     idata = load_run(path)
-    assert {"posterior", "sample_stats", "constant_data", "vi"} <= set(idata.children)
+    assert set(idata.children) == {
+        "posterior", "sample_stats", "constant_data", "observed_data"
+    }
     assert "diverging" in idata["sample_stats"].dataset.data_vars
     assert idata.attrs["nuts_runtime_s"] > 0
-    assert "mse_nuts" in idata.attrs and "vi_mse" in idata.attrs
+    assert "mse_nuts" in idata.attrs
     metadata = json.loads(idata.attrs["provenance"])
     assert metadata["seed"] == 0
     assert metadata["dt"] == 0.1

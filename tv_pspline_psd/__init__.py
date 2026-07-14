@@ -16,6 +16,12 @@ import jax as _jax
 _jax.config.update("jax_enable_x64", True)
 
 # Submodule imports must follow the x64 config above (E402 is expected here).
+from .adaptive_knots import (  # noqa: E402
+    AdaptiveKnotResult,
+    WhittleMapResult,
+    fit_adaptive_knots,
+    fit_whittle_map,
+)
 from .config import PSplineConfig  # noqa: E402
 from .diagnostics import summarize_mcmc_diagnostics  # noqa: E402
 from .inference import (  # noqa: E402
@@ -56,6 +62,10 @@ from .stft import moving_stft, run_stft_mcmc, stft_white_noise_calibration  # no
 
 __all__ = [
     "PSplineConfig",
+    "AdaptiveKnotResult",
+    "WhittleMapResult",
+    "fit_adaptive_knots",
+    "fit_whittle_map",
     "fit_log_pspline_surface",
     "wdm_analysis_coefficients",
     "run_wdm_psd_mcmc",
