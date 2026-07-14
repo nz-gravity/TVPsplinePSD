@@ -187,7 +187,7 @@ def main() -> None:
     config = PSplineConfig(
         n_interior_knots_time=args.time_knots,
         n_interior_knots_freq=args.freq_knots,
-        adaptive_time_knots=False,
+        freq_knot_strategy="linear",
         centered=True,
         trim_time_bins=4,
         trim_low_freq_channels=4,

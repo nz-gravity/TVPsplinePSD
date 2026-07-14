@@ -20,7 +20,7 @@ def smoke_config() -> PSplineConfig:
 	return PSplineConfig(
 		n_interior_knots_time=12,
 		n_interior_knots_freq=12,
-		adaptive_time_knots=False,
+		freq_knot_strategy="linear",
 	)
 
 

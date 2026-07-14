@@ -128,7 +128,21 @@ def load_run(path: str | Path) -> az.InferenceData:
 
 
 def _config_from_idata(idata: az.InferenceData) -> PSplineConfig:
-    return PSplineConfig(**json.loads(idata.attrs["config"]))
+    config_data = json.loads(idata.attrs["config"])
+    # Saved artifacts from the retired time-only allocation API keep their
+    # stored knot vectors, so reconstruction remains exact. Their frequency
+    # basis was linear by construction.
+    retired = {
+        "adaptive_time_knots",
+        "adaptive_time_knot_smoothing",
+        "adaptive_time_knot_floor",
+    }
+    if retired.intersection(config_data):
+        config_data.pop("freq_knot_strategy", None)
+        config_data["freq_knot_strategy"] = "linear"
+        for key in retired:
+            config_data.pop(key, None)
+    return PSplineConfig(**config_data)
 
 
 def _posterior_samples(idata: az.InferenceData) -> dict[str, np.ndarray]:

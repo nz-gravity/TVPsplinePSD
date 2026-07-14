@@ -94,7 +94,7 @@ def test_dynamic_whittle_smoke() -> None:
         config=PSplineConfig(
             n_interior_knots_time=4,
             n_interior_knots_freq=3,
-            adaptive_time_knots=False,
+            freq_knot_strategy="linear",
         ),
         n_time_grid=12,
         n_warmup=8,

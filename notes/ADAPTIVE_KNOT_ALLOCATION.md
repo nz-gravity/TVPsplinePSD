@@ -1,7 +1,8 @@
 # Adaptive knot allocation study
 
-Status: implemented locally on `main`, but not committed or merged. The
-working tree also contains unrelated pre-existing edits; do not reset them.
+Status: the original allocator was committed to `main` in `0cd9357`. The
+frequency-strategy configuration policy below is the current working-tree
+change and still needs its own commit.
 
 ## What was added
 
@@ -32,9 +33,25 @@ The selected knots are fixed before NUTS (empirical-Bayes pilot); direct free
 knot-coordinate gradient optimization was not pursued because the quantile
 allocator captures the gain while avoiding collision/local-mode issues.
 
+## Public selection policy
+
+Time knots are always linear unless a caller supplies explicit physical time
+knots for a controlled experiment. Frequency placement is selected with
+`PSplineConfig(freq_knot_strategy=...)`:
+
+- `"adaptive"` (the default): curvature knots from the Whittle-MAP pilot;
+- `"linear"`: uniform spacing in Hz, for a baseline or exact legacy control;
+- `"log"`: uniform spacing in log Hz, requiring a strictly positive analysis
+  frequency grid.
+
+Explicit `interior_knots_freq` always takes priority over the configured
+strategy. The selected strategy and final physical knots are retained in fit
+results and provenance.
+
 ## Verification and cleanup
 
 The full suite passed before cleanup (`44 passed`). Per request, the two
 dedicated experimental test files were removed; the remaining suite passes
-after cleanup (`32 passed in 14.60s`). Production implementation and benchmark
-artifacts remain.
+after cleanup. After introducing the strategy policy, it passes with
+`33 passed in 15.01s`. Production implementation and benchmark artifacts
+remain.

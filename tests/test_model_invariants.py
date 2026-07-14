@@ -155,7 +155,7 @@ def test_gibbs_joint_smoke_for_both_parameterizations() -> None:
         degree_freq=1,
         diff_order_time=1,
         diff_order_freq=1,
-        adaptive_time_knots=False,
+        freq_knot_strategy="linear",
     )
     beta_means = []
     for centered in (False, True):

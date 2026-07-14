@@ -175,7 +175,7 @@ def run_benchmark(
     config = PSplineConfig(
         n_interior_knots_time=n_time_knots,
         n_interior_knots_freq=n_freq_knots,
-        adaptive_time_knots=False,
+        freq_knot_strategy="linear",
         centered=True,
     )
 

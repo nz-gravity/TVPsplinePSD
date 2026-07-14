@@ -19,7 +19,7 @@ def test_save_load_regenerates_surface(tmp_path):
     rng = np.random.default_rng(0)
     data = rng.standard_normal(576)
     config = PSplineConfig(
-        n_interior_knots_time=4, n_interior_knots_freq=4, adaptive_time_knots=False
+        n_interior_knots_time=4, n_interior_knots_freq=4, freq_knot_strategy="linear"
     )
     res = run_wdm_psd_mcmc(
         data, dt=0.1, nt=24, config=config,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from numbers import Integral
+from typing import Literal
 
 
 @dataclass
@@ -45,10 +46,9 @@ class PSplineConfig:
     trim_low_freq_channels: int = 1
     trim_high_freq_channels: int = 1
 
-    # Adaptive time-knot placement from a pilot time profile.
-    adaptive_time_knots: bool = True
-    adaptive_time_knot_smoothing: float = 1.0
-    adaptive_time_knot_floor: float = 0.25
+    # Time knots are always uniform. Frequency knots can instead be placed by
+    # a cheap Whittle-MAP pilot or on a logarithmic frequency coordinate.
+    freq_knot_strategy: Literal["adaptive", "linear", "log"] = "adaptive"
 
     # Parameterization of the eigen-coefficients. The non-centered (whitened)
     # default suits weak-data problems. On large grids the likelihood pins the
@@ -96,14 +96,16 @@ class PSplineConfig:
             "null_precision",
             "ridge_eps",
             "phi_log_base_scale",
-            "adaptive_time_knot_smoothing",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be strictly positive.")
         for name in (
             "init_penalty_time",
             "init_penalty_freq",
-            "adaptive_time_knot_floor",
         ):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative.")
+        if self.freq_knot_strategy not in {"adaptive", "linear", "log"}:
+            raise ValueError(
+                "freq_knot_strategy must be one of 'adaptive', 'linear', or 'log'."
+            )

@@ -17,17 +17,16 @@ from jax import random
 from numpyro.infer import MCMC, NUTS, init_to_value
 from wdm_transform import TimeSeries
 
+from .adaptive_knots import fit_adaptive_knots
 from .config import PSplineConfig
 from .model import (
     initialize_with_penalized_least_squares,
-    power_floor,
     pspline_surface_model,
     whiten_penalty_pair,
     whitened_init_values,
 )
 from .provenance import provenance
 from .splines import (
-    create_adaptive_time_knots,
     create_bspline_basis,
     create_bspline_roughness_penalty,
     evaluate_bspline_basis,
@@ -63,9 +62,10 @@ def fit_log_pspline_surface(
             components per cell), already trimmed to the analysis grid.
         time_grid: Rescaled time coordinates in ``[0, 1]``, shape ``(n_time,)``.
         freq_grid: Frequencies (Hz) of each channel, shape ``(n_freq,)``.
-        config: Estimator configuration.
+        config: Estimator configuration. Time knots are linear; frequency
+            placement follows ``config.freq_knot_strategy`` unless overridden.
         interior_knots_time: Optional explicit interior time knots, in the same
-            coordinates as ``time_grid``. These override adaptive time knots.
+            coordinates as ``time_grid``. These override linear time knots.
         interior_knots_freq: Optional explicit interior frequency knots in Hz.
             The fit still uses an internally normalized frequency coordinate.
         progress_bar: Show the NUTS progress bar. Set False for quiet batch runs.
@@ -100,6 +100,7 @@ def fit_log_pspline_surface(
         time_grid,
         freq_grid,
         config,
+        n_components=coeffs.shape[0],
         interior_knots_time=interior_knots_time,
         interior_knots_freq=interior_knots_freq,
     )
@@ -159,6 +160,12 @@ def fit_log_pspline_surface(
         precomputed=samples.get("log_psd"),
     )
 
+    fit_provenance = provenance(
+        seed=random_seed,
+        config=config,
+        source_data={"shape": list(coeffs.shape)},
+    )
+    fit_provenance["knot_allocation"] = spline["knot_allocation"]
     return {
         "mcmc": mcmc,
         "config": config,
@@ -174,6 +181,7 @@ def fit_log_pspline_surface(
         "knots_time_physical": spline["knots_time_physical"],
         "knots_freq_physical": spline["knots_freq_physical"],
         "knots_freq_unit": knots_freq,
+        "knot_allocation": spline["knot_allocation"],
         "B_time": B_time,
         "B_freq": B_freq,
         "whitened": whitened,
@@ -190,11 +198,7 @@ def fit_log_pspline_surface(
         "psd_upper": np.exp(log_upper),
         "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
         "nuts_runtime_s": float(nuts_runtime_s),
-        "provenance": provenance(
-            seed=random_seed,
-            config=config,
-            source_data={"shape": list(coeffs.shape)},
-        ),
+        "provenance": fit_provenance,
     }
 
 
@@ -235,10 +239,11 @@ def _prepare_spline_bases(
     freq_grid: np.ndarray,
     config: PSplineConfig,
     *,
+    n_components: int,
     interior_knots_time: np.ndarray | None = None,
     interior_knots_freq: np.ndarray | None = None,
-) -> dict[str, np.ndarray]:
-    """Build production bases while accepting explicit knots in grid units."""
+) -> dict[str, object]:
+    """Build production bases and resolve the configured knot allocation."""
     explicit_time = _validate_explicit_interior_knots(
         interior_knots_time,
         time_grid,
@@ -252,19 +257,35 @@ def _prepare_spline_bases(
         axis="freq",
     )
     selected_time = explicit_time
-    if selected_time is None and config.adaptive_time_knots:
-        pilot = np.mean(np.log(power + power_floor(power)), axis=1)
-        selected_time = create_adaptive_time_knots(
-            time_grid,
-            pilot,
-            n_interior_knots=config.n_interior_knots_time,
-            smoothing_sigma=config.adaptive_time_knot_smoothing,
-            variation_floor=config.adaptive_time_knot_floor,
-        )
+    selected_freq = explicit_freq
+    allocation = {
+        "time": "explicit" if explicit_time is not None else "linear",
+        "frequency": "explicit" if explicit_freq is not None else config.freq_knot_strategy,
+    }
+    if selected_freq is None:
+        if config.freq_knot_strategy == "adaptive":
+            pilot = fit_adaptive_knots(
+                power,
+                time_grid,
+                freq_grid,
+                counts=float(n_components),
+                n_pilot_knots_time=max(8, config.n_interior_knots_time),
+                n_pilot_knots_freq=max(16, config.n_interior_knots_freq),
+                n_knots_time=config.n_interior_knots_time,
+                n_knots_freq=config.n_interior_knots_freq,
+                method="curvature",
+            )
+            selected_freq = pilot.freq_knots
+        elif config.freq_knot_strategy == "log":
+            if freq_grid[0] <= 0:
+                raise ValueError("freq_knot_strategy='log' requires a strictly positive frequency grid.")
+            selected_freq = np.geomspace(
+                freq_grid[0], freq_grid[-1], config.n_interior_knots_freq + 2
+            )[1:-1]
 
     freq_scale = np.maximum(freq_grid[-1], 1e-12)
     freq_unit = freq_grid / freq_scale
-    explicit_freq_unit = None if explicit_freq is None else explicit_freq / freq_scale
+    selected_freq_unit = None if selected_freq is None else selected_freq / freq_scale
     B_time, knots_time = create_bspline_basis(
         time_grid,
         config.n_interior_knots_time,
@@ -275,7 +296,7 @@ def _prepare_spline_bases(
         freq_unit,
         config.n_interior_knots_freq,
         degree=config.degree_freq,
-        interior_knots=explicit_freq_unit,
+        interior_knots=selected_freq_unit,
     )
     return {
         "B_time": B_time,
@@ -284,6 +305,7 @@ def _prepare_spline_bases(
         "knots_freq_unit": knots_freq_unit,
         "knots_time_physical": knots_time.copy(),
         "knots_freq_physical": knots_freq_unit * freq_scale,
+        "knot_allocation": allocation,
     }
 
 

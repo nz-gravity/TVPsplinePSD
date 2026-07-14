@@ -51,7 +51,7 @@ def test_penalized_least_squares_init_is_scale_equivariant() -> None:
     config = PSplineConfig(
         n_interior_knots_time=2,
         n_interior_knots_freq=2,
-        adaptive_time_knots=False,
+        freq_knot_strategy="linear",
     )
     basis_time, knots_time = create_bspline_basis(time, 2, degree=3)
     basis_freq, knots_freq = create_bspline_basis(freq, 2, degree=3)
@@ -91,13 +91,13 @@ def test_penalized_least_squares_init_is_scale_equivariant() -> None:
     ],
 )
 def test_wdm_sizing_validation(n_total: int, nt: int, message: str) -> None:
-    config = PSplineConfig(adaptive_time_knots=False)
+    config = PSplineConfig(freq_knot_strategy="linear")
     with pytest.raises(ValueError, match=message):
         wdm_analysis_coefficients(np.ones(n_total), 0.1, nt, config)
 
 
 def test_fit_surface_validates_shapes_finiteness_and_grids() -> None:
-    config = PSplineConfig(adaptive_time_knots=False)
+    config = PSplineConfig(freq_knot_strategy="linear")
     coeffs = np.ones((1, 4, 5))
     with pytest.raises(ValueError, match="shape must match"):
         fit_log_pspline_surface(coeffs, np.arange(3), np.arange(5), config=config)
@@ -115,7 +115,7 @@ def test_stft_rejects_untrimmed_dc_and_nyquist() -> None:
     config = PSplineConfig(
         trim_low_freq_channels=0,
         trim_high_freq_channels=0,
-        adaptive_time_knots=False,
+        freq_knot_strategy="linear",
     )
     with pytest.raises(ValueError, match="DC/Nyquist"):
         run_stft_mcmc(
@@ -135,6 +135,7 @@ def test_stft_rejects_untrimmed_dc_and_nyquist() -> None:
         {"alpha_phi": 0.0},
         {"trim_time_bins": -1},
         {"diff_order_time": 4, "degree_time": 3},
+        {"freq_knot_strategy": "invalid"},
     ],
 )
 def test_config_rejects_invalid_hyperparameters(kwargs: dict[str, object]) -> None:
@@ -148,7 +149,7 @@ def test_streamed_calibration_matches_stored_draw_mean() -> None:
         trim_time_bins=1,
         trim_low_freq_channels=1,
         trim_high_freq_channels=1,
-        adaptive_time_knots=False,
+        freq_knot_strategy="linear",
     )
 
     def simulate(rng: np.random.Generator) -> np.ndarray:

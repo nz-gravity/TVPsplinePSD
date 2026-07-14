@@ -85,7 +85,7 @@ def load_coefficients(cache: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         trim_time_bins=TRIM_TIME,
         trim_low_freq_channels=TRIM_LOW,
         trim_high_freq_channels=1,
-        adaptive_time_knots=False,
+        freq_knot_strategy="linear",
     )
     coeffs, time_grid, freq_grid = wdm_analysis_coefficients(
         data, DT_RAW * DECIMATE, NT, config
