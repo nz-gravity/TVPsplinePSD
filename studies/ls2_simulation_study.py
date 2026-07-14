@@ -17,6 +17,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -52,8 +53,16 @@ def run_study(
     n_samples: int = 300,
     n_reference_draws: int = 200,
     seed0: int = 1000,
+    time_bin: int = 1,
+    save_exemplar: bool = True,
 ) -> dict[str, np.ndarray]:
-    """Run ``n_repeats`` LS2 fits and collect per-repeat error metrics."""
+    """Run ``n_repeats`` LS2 fits and collect per-repeat error metrics.
+
+    ``time_bin`` coarse-grains the WDM Whittle likelihood over blocks of
+    consecutive time bins (``1`` = exact, per-cell likelihood). The reference
+    and true PSD targets are unchanged, so the returned metrics measure whether
+    coarse-graining shifts the recovered surface, its error, or its coverage.
+    """
     config = PSplineConfig()
 
     # The WDM target E[w^2] and the analytic pointwise PSD live on the fixed,
@@ -71,7 +80,7 @@ def run_study(
     # the WDM-coefficient units the estimator infers (E[w^2] = C_m * S_dig).
     calibration = wdm_white_noise_calibration(n_total, dt, nt, config)
 
-    mse_ref, mse_true, rel_ref, coverage, divergences = [], [], [], [], []
+    mse_ref, mse_true, rel_ref, coverage, divergences, runtimes = [], [], [], [], [], []
     true_psd = None
     t0 = time.time()
     for rep in range(n_repeats):
@@ -81,6 +90,7 @@ def run_study(
             data, dt=dt, nt=nt, config=config,
             n_warmup=n_warmup, n_samples=n_samples,
             num_chains=1, random_seed=seed0 + rep,
+            time_bin=time_bin,
         )
         if true_psd is None:
             true_psd = calibration[None, :] * true_psd_ls2(
@@ -89,7 +99,8 @@ def run_study(
             # Persist a single exemplar fit (sampling sites + diagnostics) for
             # later trace/divergence/loss inspection; the aggregate metrics over
             # all repeats are saved separately as a small .npz.
-            save_run(res, RESULTS_DIR / "ls2_exemplar.nc", true_psd=true_psd)
+            if save_exemplar:
+                save_run(res, RESULTS_DIR / "ls2_exemplar.nc", true_psd=true_psd)
 
         mse_ref.append(mse_log_psd(reference_psd, res["psd_mean"]))
         mse_true.append(mse_log_psd(true_psd, res["psd_mean"]))
@@ -98,6 +109,7 @@ def run_study(
             interval_coverage(reference_psd, res["psd_lower"], res["psd_upper"])
         )
         divergences.append(summarize_mcmc_diagnostics(res)["divergences"])
+        runtimes.append(float(res["nuts_runtime_s"]))
 
         if (rep + 1) % 10 == 0 or rep == 0:
             elapsed = time.time() - t0
@@ -114,6 +126,7 @@ def run_study(
         "relative_error_reference": np.asarray(rel_ref),
         "coverage": np.asarray(coverage),
         "divergences": np.asarray(divergences),
+        "nuts_runtime_s": np.asarray(runtimes),
         "reference_psd": reference_psd,
         "true_psd": true_psd,
     }
@@ -151,11 +164,110 @@ def summarize_and_plot(results: dict[str, np.ndarray]) -> None:
     print(f"\nSaved results to {RESULTS_DIR}")
 
 
+def compare_binning(
+    *,
+    time_bins: list[int],
+    n_repeats: int,
+    n_total: int,
+    nt: int,
+    n_warmup: int,
+    n_samples: int,
+    n_reference_draws: int,
+) -> None:
+    """Compare exact vs time-coarse-grained LS2 fits at fixed ``n_total``.
+
+    Same realizations and reference target for every ``time_bin``, so a shift in
+    the error or coverage distribution isolates the coarse-graining bias.
+    """
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    per_bin: dict[int, dict[str, np.ndarray]] = {}
+    for tb in time_bins:
+        print(f"\n########## time_bin = {tb}  (N={n_total}, nt={nt}) ##########")
+        per_bin[tb] = run_study(
+            n_repeats=n_repeats,
+            n_total=n_total,
+            nt=nt,
+            n_warmup=n_warmup,
+            n_samples=n_samples,
+            n_reference_draws=n_reference_draws,
+            time_bin=tb,
+            save_exemplar=(tb == time_bins[0]),
+        )
+
+    def _med(x: np.ndarray) -> float:
+        return float(np.median(x))
+
+    print("\n=== LS2 coarse-graining comparison ===")
+    print(f"N={n_total}  nt={nt}  repeats={n_repeats}")
+    header = f"{'time_bin':>8} | {'MSE_log(ref)':>13} | {'coverage':>9} | {'runtime_s':>10} | {'speedup':>7} | {'div':>4}"
+    print(header)
+    print("-" * len(header))
+    base_rt = _med(per_bin[time_bins[0]]["nuts_runtime_s"])
+    rows = {}
+    for tb in time_bins:
+        r = per_bin[tb]
+        rt = _med(r["nuts_runtime_s"])
+        rows[tb] = {
+            "mse_log_reference_median": _med(r["mse_log_reference"]),
+            "mse_log_reference_p5_p95": [
+                float(np.percentile(r["mse_log_reference"], 5)),
+                float(np.percentile(r["mse_log_reference"], 95)),
+            ],
+            "coverage_median": _med(r["coverage"]),
+            "runtime_s_median": rt,
+            "speedup_vs_exact": base_rt / rt,
+            "divergences_total": int(r["divergences"].sum()),
+        }
+        print(
+            f"{tb:>8} | {rows[tb]['mse_log_reference_median']:>13.4f} | "
+            f"{rows[tb]['coverage_median']:>9.3f} | {rt:>10.2f} | "
+            f"{rows[tb]['speedup_vs_exact']:>7.2f} | {rows[tb]['divergences_total']:>4d}"
+        )
+
+    np.savez(
+        RESULTS_DIR / "ls2_binning_comparison.npz",
+        time_bins=np.asarray(time_bins),
+        **{f"tb{tb}_mse_log_reference": per_bin[tb]["mse_log_reference"] for tb in time_bins},
+        **{f"tb{tb}_coverage": per_bin[tb]["coverage"] for tb in time_bins},
+        **{f"tb{tb}_runtime_s": per_bin[tb]["nuts_runtime_s"] for tb in time_bins},
+    )
+    (RESULTS_DIR / "ls2_binning_comparison.json").write_text(
+        json.dumps({"n_total": n_total, "nt": nt, "repeats": n_repeats, "rows": rows}, indent=2)
+        + "\n"
+    )
+    print(f"\nSaved comparison to {RESULTS_DIR}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeats", type=int, default=100)
     parser.add_argument("--quick", action="store_true", help="fast smoke run")
+    parser.add_argument(
+        "--compare-binning",
+        action="store_true",
+        help="compare exact vs time-coarse-grained fits at N=9216",
+    )
+    parser.add_argument("--n-total", type=int, default=9216)
+    parser.add_argument("--nt", type=int, default=384)
+    parser.add_argument(
+        "--time-bins", default="1,4,8", help="comma-separated time_bin ladder"
+    )
     args = parser.parse_args()
+
+    if args.compare_binning:
+        time_bins = [int(v) for v in args.time_bins.split(",")]
+        if args.quick:
+            compare_binning(
+                time_bins=time_bins, n_repeats=5, n_total=args.n_total, nt=args.nt,
+                n_warmup=80, n_samples=80, n_reference_draws=40,
+            )
+        else:
+            compare_binning(
+                time_bins=time_bins, n_repeats=args.repeats, n_total=args.n_total,
+                nt=args.nt, n_warmup=300, n_samples=300, n_reference_draws=200,
+            )
+        return
+
     if args.quick:
         results = run_study(n_repeats=5, n_warmup=80, n_samples=80, n_reference_draws=40)
     else:

@@ -94,7 +94,8 @@ def test_tang_centered_and_noncentered_coefficients_match() -> None:
         trace = _trace(
             _dynamic_whittle_model,
             _tensor_values(config, eig, lt, lf, null),
-            jnp.ones(4), basis_time, bf, lt, lf, null, config,
+            2 * jnp.ones(4), 2 * jnp.ones(4),
+            basis_time, bf, lt, lf, null, config,
         )
         coefficients.append(np.asarray(trace["eig_coeffs"]["value"]))
     np.testing.assert_allclose(coefficients[0], coefficients[1], rtol=1e-6, atol=1e-6)

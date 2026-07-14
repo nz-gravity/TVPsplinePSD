@@ -25,6 +25,7 @@ from .adaptive_knots import (  # noqa: E402
 from .config import PSplineConfig  # noqa: E402
 from .diagnostics import summarize_mcmc_diagnostics  # noqa: E402
 from .inference import (  # noqa: E402
+    adaptive_frequency_bin_starts,
     evaluate_dense_posterior_mean,
     fit_log_pspline_surface,
     run_wdm_psd_mcmc,
@@ -46,6 +47,7 @@ from .metrics import (  # noqa: E402
     relative_surface_error,
 )
 from .moving_periodogram import (  # noqa: E402
+    bin_tang_ordinates,
     run_tang_dynamic_whittle_mcmc,
     tang_moving_periodogram,
 )
@@ -67,12 +69,14 @@ __all__ = [
     "fit_adaptive_knots",
     "fit_whittle_map",
     "fit_log_pspline_surface",
+    "adaptive_frequency_bin_starts",
     "wdm_analysis_coefficients",
     "run_wdm_psd_mcmc",
     "run_gibbs_signal_noise_mcmc",
     "run_multichannel_joint_mcmc",
     "run_tang_dynamic_whittle_mcmc",
     "tang_moving_periodogram",
+    "bin_tang_ordinates",
     "run_stationary_psd_mcmc",
     "run_stft_mcmc",
     "moving_stft",

@@ -140,6 +140,58 @@ def sample_eigen_coefficients(
     return coeffs.reshape(shape)
 
 
+def sample_tensor_eigen_coefficients(
+    basis_eig_time: jnp.ndarray,
+    basis_eig_freq: jnp.ndarray,
+    lam_time: jnp.ndarray,
+    lam_freq: jnp.ndarray,
+    joint_null: jnp.ndarray,
+    config: PSplineConfig,
+) -> jnp.ndarray:
+    """Sample the shared anisotropic tensor P-spline coefficients.
+
+    Front ends may evaluate the returned coefficient matrix on a rectangular
+    grid (WDM/STFT) or at grouped scattered locations (moving periodogram).
+    Keeping this construction here ensures that those representations differ
+    only in their surface evaluator and power/count observations.
+    """
+    n_basis_time = basis_eig_time.shape[1]
+    n_basis_freq = basis_eig_freq.shape[1]
+    phi_time = _sample_log_gamma(
+        "phi_time", config.alpha_phi, config.beta_phi, config.phi_log_base_scale
+    )
+    phi_freq = _sample_log_gamma(
+        "phi_freq", config.alpha_phi, config.beta_phi, config.phi_log_base_scale
+    )
+    scale = eigen_prior_scale(
+        phi_time, phi_freq, lam_time, lam_freq, joint_null, config
+    )
+    return sample_eigen_coefficients(
+        "s", scale, (n_basis_time, n_basis_freq), config
+    )
+
+
+def power_whittle_log_likelihood(
+    summed_power: jnp.ndarray,
+    counts: jnp.ndarray,
+    log_psd: jnp.ndarray,
+) -> jnp.ndarray:
+    r"""Return the common power/count Whittle log likelihood.
+
+    If ``nu`` independent real Gaussian components share variance ``S``, their
+    summed squared power ``P`` contributes, up to a data-only constant,
+
+    ``-0.5 * (nu * log(S) + P / S)``.
+
+    This covers a real WDM coefficient (``P=w**2, nu=1``), a complex Fourier
+    ordinate (``P=2*MI, nu=2`` under the Tang normalization), and sums of
+    either kind when the surface is approximated as constant within a bin.
+    """
+    return -0.5 * jnp.sum(
+        counts * log_psd + summed_power * jnp.exp(-log_psd)
+    )
+
+
 def pspline_surface_model(
     summed_power: jnp.ndarray,
     counts: jnp.ndarray,
@@ -182,28 +234,18 @@ def pspline_surface_model(
         joint_null: Boolean mask ``(K_t, K_f)`` of the joint penalty null space.
         config: Estimator configuration.
     """
-    n_basis_time = basis_eig_time.shape[1]
-    n_basis_freq = basis_eig_freq.shape[1]
-
-    phi_time = _sample_log_gamma(
-        "phi_time", config.alpha_phi, config.beta_phi, config.phi_log_base_scale
-    )
-    phi_freq = _sample_log_gamma(
-        "phi_freq", config.alpha_phi, config.beta_phi, config.phi_log_base_scale
-    )
-
-    scale = eigen_prior_scale(
-        phi_time, phi_freq, lam_time, lam_freq, joint_null, config
-    )
-    eig_coeffs = sample_eigen_coefficients(
-        "s", scale, (n_basis_time, n_basis_freq), config
+    eig_coeffs = sample_tensor_eigen_coefficients(
+        basis_eig_time,
+        basis_eig_freq,
+        lam_time,
+        lam_freq,
+        joint_null,
+        config,
     )
 
     log_psd = basis_eig_time @ eig_coeffs @ basis_eig_freq.T
 
-    log_like = -0.5 * jnp.sum(
-        counts * log_psd + summed_power * jnp.exp(-log_psd)
-    )
+    log_like = power_whittle_log_likelihood(summed_power, counts, log_psd)
     numpyro.factor("whittle", log_like)
     if store_surface:
         # Storing the full surface per sample is convenient but O(n_time*n_freq)
