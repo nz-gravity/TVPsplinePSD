@@ -143,7 +143,8 @@ def run_gibbs_signal_noise_mcmc(
         resid = (coeffs_j - signal)[None, :, :]  # (R=1, n_time, n_freq)
         key, k_noise = random.split(key)
         noise_mcmc.run(
-            k_noise, resid, basis_eig_time, basis_eig_freq,
+            k_noise, jnp.sum(resid**2, axis=0), resid.shape[0],
+            basis_eig_time, basis_eig_freq,
             lam_time, lam_freq, joint_null, config, False,
             init_params=noise_init, extra_fields=("diverging",))
         nsamp = {k: np.asarray(v) for k, v in noise_mcmc.get_samples().items()}

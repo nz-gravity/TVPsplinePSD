@@ -61,7 +61,7 @@ def test_core_centered_and_noncentered_surfaces_match() -> None:
         trace = _trace(
             pspline_surface_model,
             _tensor_values(config, eig, lt, lf, null),
-            jnp.zeros((1, 2, 2)), bt, bf, lt, lf, null, config, True,
+            jnp.zeros((2, 2)), 1, bt, bf, lt, lf, null, config, True,
         )
         surfaces.append(np.asarray(trace["log_psd"]["value"]))
     np.testing.assert_allclose(surfaces[0], surfaces[1], rtol=1e-6, atol=1e-6)
