@@ -40,6 +40,7 @@ from scipy.signal import csd, welch
 from tv_pspline_psd import (
     PSplineConfig,
     fit_log_pspline_surface,
+    plot_surface_knots,
     set_paper_style,
     summarize_mcmc_diagnostics,
     wdm_analysis_coefficients,
@@ -159,6 +160,65 @@ def warp_freq(f: np.ndarray) -> np.ndarray:
     return np.where(f <= F_BREAK, low, high)
 
 
+def _quadratic_minimum_track(log_surface: np.ndarray, freq: np.ndarray) -> np.ndarray:
+    """Sub-channel minimum from a three-point quadratic around the grid argmin."""
+    idx = np.argmin(log_surface, axis=2)
+    idx = np.clip(idx, 1, freq.size - 2)
+    ym = np.take_along_axis(log_surface, (idx - 1)[..., None], axis=2)[..., 0]
+    y0 = np.take_along_axis(log_surface, idx[..., None], axis=2)[..., 0]
+    yp = np.take_along_axis(log_surface, (idx + 1)[..., None], axis=2)[..., 0]
+    denom = ym - 2.0 * y0 + yp
+    delta_bins = np.divide(
+        0.5 * (ym - yp), denom,
+        out=np.zeros_like(denom),
+        where=np.abs(denom) > 1e-12,
+    )
+    delta_bins = np.clip(delta_bins, -1.0, 1.0)
+    return freq[idx] + delta_bins * np.median(np.diff(freq))
+
+
+def _null_track_draws(
+    eig_samples: np.ndarray,
+    bt_eig: np.ndarray,
+    bf_eig: np.ndarray,
+    freq: np.ndarray,
+    f0: float,
+    *,
+    knots_freq: np.ndarray,
+    degree_freq: int,
+    u_freq: np.ndarray,
+    dense_points: int = 801,
+) -> dict[str, np.ndarray]:
+    """Extract centroid, quadratic-minimum and dense spline-minimum tracks."""
+    win = (freq > f0 - 0.004) & (freq < f0 + 0.004)
+    log_surface = np.einsum(
+        "ta,nab,jb->ntj", bt_eig, eig_samples, bf_eig[win], optimize=True
+    )
+    depth = np.maximum(
+        0.0,
+        np.percentile(log_surface, 75, axis=2, keepdims=True) - log_surface,
+    )
+    centroid = (freq[win] * depth).sum(axis=2) / depth.sum(axis=2)
+    quadratic = _quadratic_minimum_track(log_surface, freq[win])
+    del log_surface
+
+    dense_freq = np.linspace(f0 - 0.004, f0 + 0.004, dense_points)
+    dense_unit = warp_freq(dense_freq) / np.maximum(warp_freq(freq)[-1], 1e-12)
+    dense_basis = evaluate_bspline_basis(
+        dense_unit,
+        knots_freq,
+        degree=degree_freq,
+    ) @ u_freq
+    spline_min = np.empty((eig_samples.shape[0], bt_eig.shape[0]))
+    for start in range(0, eig_samples.shape[0], 50):
+        chunk = np.einsum(
+            "ta,nab,jb->ntj", bt_eig, eig_samples[start:start + 50], dense_basis,
+            optimize=True,
+        )
+        spline_min[start:start + chunk.shape[0]] = dense_freq[np.argmin(chunk, axis=2)]
+    return {"centroid": centroid, "quadratic": quadratic, "spline_min": spline_min}
+
+
 def coherence_matrix(aet: dict[str, np.ndarray], fs: float, nper: int):
     """Pairwise magnitude-squared coherence between the AET channels."""
     psd = {k: welch(v, fs, nperseg=nper)[1] for k, v in aet.items()}
@@ -186,11 +246,18 @@ def main() -> None:
     # 16 ~ the simulation study's knot-scaling rule round(8*(nt/24)^0.4) at
     # nt=120; the old default 8 under-tracks the fast null-flank swings.
     parser.add_argument("--time-knots", type=int, default=16)
+    parser.add_argument(
+        "--tag-suffix", default="",
+        help="Append a suffix to every output tag (use for diagnostics so the "
+             "production artifacts are never overwritten).",
+    )
     args = parser.parse_args()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     tag = f"{args.channel}_{args.data}"
     if args.gaps:
         tag += "_gaps"
+    if args.tag_suffix:
+        tag += f"_{args.tag_suffix}"
     if args.n_samples < 100:
         tag += "_pilot"  # keep short test chains from clobbering production output
     nt, trim_low = GRID[args.data]
@@ -213,7 +280,8 @@ def main() -> None:
     ax.set_ylabel(r"coherence $|C_{ij}|^2/(S_i S_j)$")
     ax.set_ylim(1e-4, 1.5)
     ax.legend(fontsize=7, ncol=2)
-    fig.savefig(RESULTS_DIR / f"aet_coherence_{args.data}.png", dpi=200,
+    coherence_tag = tag if args.tag_suffix else args.data
+    fig.savefig(RESULTS_DIR / f"aet_coherence_{coherence_tag}.png", dpi=200,
                 bbox_inches="tight")
     plt.close(fig)
 
@@ -279,19 +347,40 @@ def main() -> None:
     # window -> depth-weighted valley centroid -> median and 90% CI. The
     # centroid is a nonlinear functional of the surface, so its credible
     # interval must be propagated per draw rather than read off psd_lower/upper.
-    eig_samples = reconstruct_eig_coeff_samples(
-        res["samples"], res["whitened"], config)
+    grouped_samples = res["mcmc"].get_samples(group_by_chain=True)
+    eig_by_chain = np.stack([
+        reconstruct_eig_coeff_samples(
+            {name: np.asarray(values[chain]) for name, values in grouped_samples.items()},
+            res["whitened"],
+            config,
+        )
+        for chain in range(args.num_chains)
+    ])
+    eig_samples = eig_by_chain.reshape((-1,) + eig_by_chain.shape[2:])
     Bt_eig = res["B_time"] @ res["whitened"]["U_time"]
     Bf_eig = res["B_freq"] @ res["whitened"]["U_freq"]
     null_tracks = {}
     for f0 in (0.06, 0.12):
-        win = (fg > f0 - 0.004) & (fg < f0 + 0.004)
-        logS = np.einsum("ta,nab,jb->ntj", Bt_eig, eig_samples, Bf_eig[win],
-                         optimize=True)
-        depth = np.maximum(
-            0.0, np.percentile(logS, 75, axis=2, keepdims=True) - logS)
-        fnull = (fg[win] * depth).sum(axis=2) / depth.sum(axis=2)
-        null_tracks[f0] = np.percentile(fnull, [5, 50, 95], axis=0)
+        draws = _null_track_draws(
+            eig_samples,
+            Bt_eig,
+            Bf_eig,
+            fg,
+            f0,
+            knots_freq=res["knots_freq"],
+            degree_freq=config.degree_freq,
+            u_freq=res["whitened"]["U_freq"],
+        )
+        for method, track_draws in draws.items():
+            null_tracks[(f0, method)] = np.percentile(
+                track_draws, [5, 50, 95], axis=0
+            )
+            reshaped = track_draws.reshape(
+                args.num_chains, args.n_samples, track_draws.shape[1]
+            )
+            null_tracks[(f0, method, "by_chain")] = np.percentile(
+                reshaped, [5, 50, 95], axis=1
+            ).transpose(1, 0, 2)
 
     np.savez(
         RESULTS_DIR / f"aet_fullband_{tag}.npz",
@@ -303,7 +392,22 @@ def main() -> None:
         runtime_s=total_s, nuts_runtime_s=res["nuts_runtime_s"],
         divergences=diag["divergences"],
         gaps_s=np.asarray(gaps, dtype=float).reshape(-1, 2),
-        null_track_006=null_tracks[0.06], null_track_012=null_tracks[0.12],
+        # Compatibility aliases retain the original centroid definition.
+        null_track_006=null_tracks[(0.06, "centroid")],
+        null_track_012=null_tracks[(0.12, "centroid")],
+        null_track_006_centroid=null_tracks[(0.06, "centroid")],
+        null_track_006_quadratic=null_tracks[(0.06, "quadratic")],
+        null_track_006_spline_min=null_tracks[(0.06, "spline_min")],
+        null_track_012_centroid=null_tracks[(0.12, "centroid")],
+        null_track_012_quadratic=null_tracks[(0.12, "quadratic")],
+        null_track_012_spline_min=null_tracks[(0.12, "spline_min")],
+        null_track_006_centroid_by_chain=null_tracks[(0.06, "centroid", "by_chain")],
+        null_track_006_quadratic_by_chain=null_tracks[(0.06, "quadratic", "by_chain")],
+        null_track_006_spline_min_by_chain=null_tracks[(0.06, "spline_min", "by_chain")],
+        null_track_012_centroid_by_chain=null_tracks[(0.12, "centroid", "by_chain")],
+        null_track_012_quadratic_by_chain=null_tracks[(0.12, "quadratic", "by_chain")],
+        null_track_012_spline_min_by_chain=null_tracks[(0.12, "spline_min", "by_chain")],
+        time_knots=args.time_knots,
     )
     with open(RESULTS_DIR / f"aet_fullband_{tag}_diag.json", "w") as fp:
         json.dump(diag, fp, indent=2, default=float)
@@ -338,6 +442,11 @@ def main() -> None:
         axes[1].pcolormesh(tg_days, fg, np.log(S_est).T, shading="auto",
                            cmap="viridis", vmin=mesh0.get_clim()[0],
                            vmax=mesh0.get_clim()[1])
+    plot_surface_knots(
+        axes[1], res,
+        time_transform=lambda values: values * n_total * dt / 86400.0,
+        freq_transform=lambda values: np.interp(values, warp_freq(fg), fg),
+    )
     axes[0].set_title("raw WDM log power")
     axes[1].set_title(r"posterior mean $\log \hat S(t,f)$")
     for ax in axes:

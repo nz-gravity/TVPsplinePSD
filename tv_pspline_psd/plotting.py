@@ -55,6 +55,37 @@ def save_figure(fig: plt.Figure, path: str | Path, *, dpi: int = 160) -> Path:
     return path
 
 
+def plot_surface_knots(
+    ax: plt.Axes,
+    results: dict[str, object],
+    *,
+    time_transform=None,
+    freq_transform=None,
+):
+    """Overlay the realized interior tensor-product knots on a surface axis.
+
+    Optional transforms map the fit coordinates into the coordinates displayed
+    by the plot (for example, normalized time to days or a warped frequency
+    coordinate back to Hz).
+    """
+    config = results["config"]
+    time_knots = np.asarray(results["knots_time_physical"])[
+        config.degree_time + 1:-(config.degree_time + 1)
+    ]
+    freq_knots = np.asarray(results["knots_freq_physical"])[
+        config.degree_freq + 1:-(config.degree_freq + 1)
+    ]
+    if time_transform is not None:
+        time_knots = np.asarray(time_transform(time_knots))
+    if freq_transform is not None:
+        freq_knots = np.asarray(freq_transform(freq_knots))
+    knot_t, knot_f = np.meshgrid(time_knots, freq_knots, indexing="ij")
+    return ax.scatter(
+        knot_t.ravel(), knot_f.ravel(), s=12, facecolors="none",
+        edgecolors="red", linewidths=0.7, zorder=3,
+    )
+
+
 def quicklook(idata, *, path: str | Path | None = None) -> plt.Figure | Path:
     """One-glance summary of a saved fit (see :mod:`tv_pspline_psd.io`).
 
@@ -121,9 +152,14 @@ def plot_surface_comparison(
     *,
     freq_scale: float = 1.0,
     freq_label: str = "Frequency",
+    show_knots: bool = False,
     path: str | Path,
 ) -> Path:
-    """Raw power, posterior-mean and reference log-surfaces side by side."""
+    """Raw power, posterior-mean and reference log-surfaces side by side.
+
+    When ``show_knots`` is true, red open circles mark the tensor-product
+    interior knots on the posterior-mean panel.
+    """
     time_grid = np.asarray(results["time_grid"])
     freq_grid = np.asarray(results["freq_grid"]) * freq_scale
 
@@ -149,6 +185,10 @@ def plot_surface_comparison(
         ax.set_xlabel("Rescaled WDM time")
         fig.colorbar(mesh, ax=ax, label="log local power")
     axes[0].set_ylabel(freq_label)
+    if show_knots:
+        plot_surface_knots(
+            axes[1], results, freq_transform=lambda values: values * freq_scale,
+        )
     return save_figure(fig, path)
 
 

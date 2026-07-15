@@ -178,6 +178,10 @@ def run_gibbs_signal_noise_mcmc(
     return {
         "time_grid": np.asarray(time_grid),
         "freq_grid": np.asarray(freq_grid),
+        "knots_time": knots_time,
+        "knots_freq": knots_freq,
+        "knots_time_physical": knots_time.copy(),
+        "knots_freq_physical": knots_freq * np.maximum(freq_grid[-1], 1e-12),
         "beta_mean": beta_draws.mean(axis=0),
         "beta_std": beta_draws.std(axis=0),
         "beta_samples": beta_draws,

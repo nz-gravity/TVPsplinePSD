@@ -209,3 +209,38 @@ def test_dynamic_whittle_smoke() -> None:
     assert recipe["time"]["bin_size"] == 2
     assert recipe["frequency"]["bin_size"] == 2
     assert recipe["selector"]["time"]["method"] == "fixed"
+
+
+def test_dynamic_whittle_accepts_explicit_physical_knots() -> None:
+    data = np.random.default_rng(31).standard_normal(256)
+    config = PSplineConfig(
+        n_interior_knots_time=2,
+        n_interior_knots_freq=2,
+        freq_knot_strategy="linear",
+    )
+    result = run_tang_dynamic_whittle_mcmc(
+        data,
+        dt=0.1,
+        m=8,
+        thin=2,
+        config=config,
+        interior_knots_time=np.array([0.4, 0.6]),
+        interior_knots_freq=np.array([1.8, 3.2]),
+        n_time_grid=8,
+        n_warmup=4,
+        n_samples=4,
+        num_chains=1,
+        random_seed=9,
+    )
+    np.testing.assert_allclose(
+        result["knots_time_physical"][config.degree_time + 1:-(config.degree_time + 1)],
+        [0.4, 0.6],
+    )
+    np.testing.assert_allclose(
+        result["knots_freq_physical"][config.degree_freq + 1:-(config.degree_freq + 1)],
+        [1.8, 3.2],
+    )
+    assert result["provenance"]["knot_allocation"] == {
+        "time": "explicit",
+        "frequency": "explicit",
+    }

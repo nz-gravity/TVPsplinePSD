@@ -195,6 +195,8 @@ def main() -> None:
         tg_w=tg_w, fg_w=fg_w, w_data=w_data, recovered_w=recovered_w,
         true_psd_w=true_psd_w, ref_w=ref_w,
         gibbs_w_psd=gibbs_w["psd_mean"], gibbs_w_lo=gibbs_w["psd_lower"], gibbs_w_hi=gibbs_w["psd_upper"],
+        knot_time=gibbs_w["knots_time_physical"][pcfg.degree_time + 1:-(pcfg.degree_time + 1)],
+        knot_freq=gibbs_w["knots_freq_physical"][pcfg.degree_freq + 1:-(pcfg.degree_freq + 1)],
         stat_psd=stationary["psd_mean_surface"], stat_lo=stationary["psd_lower"], stat_hi=stationary["psd_upper"],
         gb_w=gb_w, n_years=n_years, r_w=r_w, snr=snr,
         ratio_w=ratio_w,
@@ -226,6 +228,15 @@ def render(fig_dir: Path, d) -> None:
         mesh = ax.pcolormesh(t_w, fg_w * 1e3, fld.T, shading="nearest", cmap="viridis",
                              vmin=vmin, vmax=vmax)
         ax.set_title(ttl); ax.set_xlabel("Time [yr]")
+    # Older caches predate saved knot coordinates; the Gibbs LISA fit used the
+    # same uniform 8 x 10 interior-knot layout in those runs.
+    knot_time = (d["knot_time"] if "knot_time" in d
+                 else np.linspace(tg_w.min(), tg_w.max(), 10)[1:-1]) * yrs
+    knot_freq = (d["knot_freq"] if "knot_freq" in d
+                 else np.linspace(fg_w.min(), fg_w.max(), 12)[1:-1]) * 1e3
+    knot_t, knot_f = np.meshgrid(knot_time, knot_freq, indexing="ij")
+    axes[1].scatter(knot_t.ravel(), knot_f.ravel(), s=10, facecolors="none",
+                    edgecolors="red", linewidths=0.6, zorder=3)
     axes[0].set_ylabel("Frequency [mHz]")
     fig.colorbar(mesh, ax=axes, label="log local power", shrink=0.9)
     save_figure(fig, fig_dir / "lisa_surface_comparison.png")

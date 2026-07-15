@@ -40,6 +40,7 @@ from scipy.stats import kstest
 
 from tv_pspline_psd import (
     PSplineConfig,
+    plot_surface_knots,
     run_wdm_psd_mcmc,
     set_paper_style,
     summarize_mcmc_diagnostics,
@@ -148,12 +149,19 @@ def plot_whitening(z, tg_days, fg, out, title):
                 z2_time_std=float(z2_time.std()), z2_freq_std=float(z2_freq.std()))
 
 
-def plot_surface(tg_days, fg, raw_pow, logS, band, out, title):
+def plot_surface(
+    tg_days, fg, raw_pow, logS, results, start_day, n_total,
+    band, out, title,
+):
     fig, axes = plt.subplots(1, 2, figsize=(7.1, 2.8), constrained_layout=True, sharey=True)
     m0 = axes[0].pcolormesh(tg_days, fg, raw_pow.T, shading="auto", cmap="viridis")
     axes[0].set_title("raw WDM log power", fontsize=9)
     axes[1].pcolormesh(tg_days, fg, logS.T, shading="auto", cmap="viridis",
                        vmin=m0.get_clim()[0], vmax=m0.get_clim()[1])
+    plot_surface_knots(
+        axes[1], results,
+        time_transform=lambda values: start_day + values * n_total * DT / 86400.0,
+    )
     axes[1].set_title(r"posterior mean $\log \hat S$", fontsize=9)
     for ax in axes:
         ax.set_yscale("log"); ax.set_ylim(*band); ax.set_xlabel("time [days]")
@@ -222,7 +230,8 @@ def run_experiment(name: str, channel: str, fmin: float, fmax: float) -> dict:
     plot_null_zoom(tg_days, fg, res["power"], channel, outdir / "null_zoom.png",
                    f"{name}: null wander ({channel})")
     plot_surface(tg_days, fg, np.log(res["power"] + 1e-300) + np.log(to_psd),
-                 np.log(S_est), (f_lo, f_hi), outdir / "surface.png", f"{name}: {channel}")
+                 np.log(S_est), res, start_used, n_total, (f_lo, f_hi),
+                 outdir / "surface.png", f"{name}: {channel}")
 
     np.savez(outdir / "fit.npz", time_grid_days=tg_days, freq_grid=fg,
              psd_mean=S_est, psd_lower=S_lo, psd_upper=S_hi, z2_time=(z**2).mean(1),

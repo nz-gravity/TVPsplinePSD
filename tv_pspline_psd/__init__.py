@@ -55,6 +55,7 @@ from .moving_periodogram import (  # noqa: E402
 )
 from .plotting import (  # noqa: E402
     plot_channel_slice,
+    plot_surface_knots,
     plot_surface_comparison,
     quicklook,
     save_figure,
@@ -96,6 +97,7 @@ __all__ = [
     "mse_log_psd",
     "interval_coverage",
     "plot_surface_comparison",
+    "plot_surface_knots",
     "plot_channel_slice",
     "quicklook",
     "save_figure",

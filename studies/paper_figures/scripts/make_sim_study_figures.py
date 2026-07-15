@@ -5,20 +5,19 @@ moving-periodogram dynamic Whittle -- are fitted with the *same* whitened
 P-spline model, so the comparison isolates the time-frequency representation.
 
 Produces:
-  * ``sim_three_panel.png``  (Fig 1) -- true log-PSD, WDM posterior median, and
-    moving-periodogram posterior median for a single LS2 realization, shared
+  * ``sim_three_panel.png``  (Fig 2) -- true log-PSD and posterior geometric
+    means from WDM and the moving periodogram for one realization, with a shared
     colour scale.
-  * ``sim_mse_coverage.png`` (Fig 2) -- MSE_{log f}, 90% credible-interval
+  * ``sim_mse_coverage.png`` (Fig 3) -- MSE_{log f}, 90% credible-interval
     coverage, CI width, and per-fit wall time versus the number of
     observations, one curve per likelihood, each point over ``--repeats``
     realizations.
 
-Metrics are saved as one shard per duration (``sim_metrics_nt{N}.npz``), so
-cluster array jobs can each run a single ``--nt`` value and the figure is
-re-rendered from all shards with ``--render-only``. Every render also writes a
-long-format ``sim_metrics.csv`` (one row per realization) next to the shards --
-edit values there and pass ``--from-csv`` to re-render Fig 2 from the edited
-file without touching the npz shards.
+Metrics are saved as one shard per duration and common knot count
+(``sim_metrics_kf{K}_nt{N}.npz``), so cluster array jobs can run one pair at a
+time and the figure can be re-rendered with ``--render-only``. Every render also
+writes a long-format CSV (one row per realization) next to the shards; pass it
+back with ``--from-csv`` to re-render Figure 3 without refitting.
 
     python studies/paper_figures/scripts/make_sim_study_figures.py --repeats 20
     python studies/paper_figures/scripts/make_sim_study_figures.py --nt 384 --skip-fig1  # one shard
@@ -35,11 +34,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.interpolate import RegularGridInterpolator
 
 from tv_pspline_psd import (
     PSplineConfig,
-    interval_coverage,
     run_tang_dynamic_whittle_mcmc,
     run_wdm_psd_mcmc,
     set_paper_style,
@@ -47,10 +44,13 @@ from tv_pspline_psd import (
     tang_moving_periodogram,
 )
 from tv_pspline_psd.datasets import (
+    monte_carlo_reference,
     simulate_ls2,
     true_psd_ls2,
     wdm_white_noise_calibration,
 )
+from tv_pspline_psd.inference import reconstruct_eig_coeff_samples
+from tv_pspline_psd.splines import evaluate_bspline_basis
 
 set_paper_style()
 
@@ -58,12 +58,14 @@ FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
 
 DT = 0.1
 NF = 24
-NT_VALUES = (24, 48, 96, 192, 384)
+NT_VALUES = (24, 48, 96, 192, 384, 768, 1536)
 TANG_M, TANG_THIN = 16, 2
-U_COMMON = np.linspace(0.05, 0.95, 60)
+# Fixed interior evaluation domain shared by every duration and both front
+# ends. In particular, 0.95 lies outside the trimmed WDM support when nt=24.
+U_COMMON = np.linspace(0.05, 0.90, 60)
 F_COMMON = np.linspace(0.6, 4.4, 60)
-
-NF_KNOTS_WDM, NF_KNOTS_TANG = 10, 6
+DEFAULT_FREQ_KNOTS = 8
+KNOT_SENSITIVITY = (6, 8, 10)
 
 
 def _time_knots(nt: int) -> int:
@@ -76,61 +78,128 @@ def _time_knots(nt: int) -> int:
     return round(8 * (nt / 24) ** 0.4)
 
 
-def _configs(nt: int) -> tuple[PSplineConfig, PSplineConfig]:
+def _configs(nt: int, freq_knots: int) -> tuple[PSplineConfig, PSplineConfig]:
     kt = _time_knots(nt)
-    return (PSplineConfig(n_interior_knots_time=kt, n_interior_knots_freq=NF_KNOTS_WDM),
-            PSplineConfig(n_interior_knots_time=kt, n_interior_knots_freq=NF_KNOTS_TANG))
+    common = dict(
+        n_interior_knots_time=kt,
+        n_interior_knots_freq=freq_knots,
+        freq_knot_strategy="linear",
+    )
+    return PSplineConfig(**common), PSplineConfig(**common)
 
 
 def _tang_calibration() -> float:
-    return float(np.mean(tang_moving_periodogram(
-        np.random.default_rng(1).standard_normal(8192), m=TANG_M, thin=TANG_THIN)["mi"]))
+    # The moving Fourier coefficient is divided by sqrt(2*pi*(2m+1)); for
+    # unit-variance white noise E[MI] is therefore exactly 1/(2*pi).
+    return 1.0 / (2.0 * np.pi)
 
 
-def _to_common(time_grid, freq_grid, log_field):
-    interp = RegularGridInterpolator(
-        (time_grid, freq_grid), log_field, bounds_error=False, fill_value=None)
-    uu, ff = np.meshgrid(U_COMMON, F_COMMON, indexing="ij")
-    return interp(np.stack([uu.ravel(), ff.ravel()], axis=-1)).reshape(uu.shape)
+# Both front ends use exactly the same interior-knot counts and physical
+# locations. Their clamped boundary knots still follow the support of their
+# respective likelihood grids, while every reported metric is evaluated well
+# inside the common support below.
+def _common_interior_knots(nt: int, freq_knots: int) -> tuple[np.ndarray, np.ndarray]:
+    # WDM support after the default one-bin trims is [1/nt, (nt-2)/nt].
+    # Tang's windowed support is slightly wider for every duration here.
+    time = np.linspace(1.0 / nt, (nt - 2.0) / nt, _time_knots(nt) + 2)[1:-1]
+    # Common frequency support after WDM trimming and over Tang's m rungs.
+    wdm_low = 1.0 / (2.0 * NF * DT)
+    wdm_high = (NF - 1.0) / (2.0 * NF * DT)
+    tang_low = 1.0 / ((2.0 * TANG_M + 1.0) * DT)
+    tang_high = TANG_M / ((2.0 * TANG_M + 1.0) * DT)
+    freq = np.linspace(max(wdm_low, tang_low), min(wdm_high, tang_high),
+                       freq_knots + 2)[1:-1]
+    return time, freq
 
 
 # Two chains of 500/500: single 250-draw chains leave rhat(phi) ~ 1.1 at the
-# largest durations, and sampling is <1 s per fit so the longer chains are free.
-def _fit_both(data, nt, seed, cal_wdm, cal_tang):
-    cfg_wdm, cfg_tang = _configs(nt)
+# largest durations. Longer chains do not materially change the surface MSE.
+def _fit_both(data, nt, seed, freq_knots):
+    cfg_wdm, cfg_tang = _configs(nt, freq_knots)
+    knots_time, knots_freq = _common_interior_knots(nt, freq_knots)
     rw = run_wdm_psd_mcmc(data, dt=DT, nt=nt, config=cfg_wdm,
+                          interior_knots_time=knots_time,
+                          interior_knots_freq=knots_freq,
                           n_warmup=500, n_samples=500, num_chains=2,
                           random_seed=seed)
     rt = run_tang_dynamic_whittle_mcmc(data, dt=DT, m=TANG_M, thin=TANG_THIN,
-                                       config=cfg_tang, n_warmup=500,
+                                       config=cfg_tang,
+                                       interior_knots_time=knots_time,
+                                       interior_knots_freq=knots_freq,
+                                       n_warmup=500,
                                        n_samples=500, num_chains=2,
                                        random_seed=seed)
     return rw, rt
 
 
-def _metrics(res, cal, log_f0_common):
+def _eig_samples(res, representation):
+    if representation == "wdm":
+        return reconstruct_eig_coeff_samples(res["samples"], res["whitened"], res["config"])
+    return np.asarray(res["eig_coeff_samples"])
+
+
+def _basis_pair(res, time, freq, representation):
+    degree_t = res["config"].degree_time
+    degree_f = res["config"].degree_freq
+    if representation == "wdm":
+        freq_coordinate = np.asarray(freq) / np.asarray(res["freq_grid"])[-1]
+    else:
+        freq_coordinate = 2.0 * DT * np.asarray(freq)
+    bt = evaluate_bspline_basis(time, res["knots_time"], degree=degree_t)
+    bf = evaluate_bspline_basis(freq_coordinate, res["knots_freq"], degree=degree_f)
+    return bt @ res["whitened"]["U_time"], bf @ res["whitened"]["U_freq"]
+
+
+def _log_surface_samples(res, time, freq, representation):
+    bt, bf = _basis_pair(res, time, freq, representation)
+    return np.einsum("ta,nab,fb->ntf", bt, _eig_samples(res, representation), bf,
+                     optimize=True)
+
+
+def _log_surface_mean_at_points(res, time, freq, representation):
+    bt, bf = _basis_pair(res, time, freq, representation)
+    return np.einsum("pa,ab,pb->p", bt, _eig_samples(res, representation).mean(axis=0),
+                     bf, optimize=True)
+
+
+def _metrics(res, cal, log_f0_common, representation, native_reference):
     cal = np.asarray(cal)
-    cal_b = cal if cal.ndim == 0 else cal[None, :]  # scalar (Tang) or per-channel (WDM)
-    # MSE on the common grid (rescaled to the analytic PSD scale).
-    fitted = _to_common(res["time_grid"], res["freq_grid"],
-                        np.log(res["psd_mean"] / cal_b + 1e-12))
+    log_draws = _log_surface_samples(res, U_COMMON, F_COMMON, representation)
+    if cal.ndim == 0:
+        log_cal = np.log(cal)
+    else:
+        log_cal = np.interp(F_COMMON, res["freq_grid"], np.log(cal))[None, :]
+    log_draws = log_draws - log_cal
+    fitted = log_draws.mean(axis=0)
     mse = float(np.mean((fitted - log_f0_common) ** 2))
-    # Coverage on the estimator's native grid against the calibrated truth.
-    true_native = cal_b * true_psd_ls2(res["time_grid"], res["freq_grid"], DT)
-    cov = interval_coverage(true_native, res["psd_lower"], res["psd_upper"])
-    # Width of the 90% credible interval on log S (scale-free, comparable across
-    # representations), averaged over the grid.
-    ci_width = float(np.mean(np.log(res["psd_upper"] + 1e-30)
-                             - np.log(res["psd_lower"] + 1e-30)))
-    return mse, cov, ci_width
+    lower, upper = np.percentile(log_draws, [5.0, 95.0], axis=0)
+    cov = float(np.mean((log_f0_common >= lower) & (log_f0_common <= upper)))
+    ci_width = float(np.mean(upper - lower))
+
+    # Diagnostic MSE against the exact finite-resolution estimand of the front
+    # end. This is deliberately separate from the common latent-PSD MSE above.
+    if representation == "wdm":
+        native_fit = np.asarray(res["log_psd_mean"])
+    else:
+        ordinates = res["ordinates"]
+        native_fit = _log_surface_mean_at_points(
+            res,
+            np.asarray(ordinates["u"]),
+            np.asarray(ordinates["omega"]) / (2.0 * np.pi * DT),
+            representation,
+        )
+    native_mse = float(np.mean((native_fit - np.log(native_reference)) ** 2))
+    return mse, cov, ci_width, native_mse
 
 
-METRIC_KEYS = ("wm", "tm", "wc", "tc", "ww", "tw", "wt", "tt", "wr", "tr", "we", "te")
+METRIC_KEYS = ("wm", "tm", "wc", "tc", "ww", "tw", "wn", "tn",
+               "wt", "tt", "wr", "tr", "we", "te")
 # Metric-key naming: prefix selects the likelihood, suffix the quantity.
 LIKELIHOOD_PREFIX = {"w": "wdm", "t": "mp"}
 METRIC_SUFFIX = {"m": "mse", "c": "coverage", "w": "ci_width",
+                 "n": "native_mse",
                  "t": "wall_time_s", "r": "rhat", "e": "neff"}
-CSV_COLUMNS = ("n_total", "likelihood", "repeat", *METRIC_SUFFIX.values())
+CSV_COLUMNS = ("n_total", "freq_knots", "likelihood", "repeat", *METRIC_SUFFIX.values())
 
 
 def _diag_extrema(res) -> tuple[float, float]:
@@ -140,14 +209,16 @@ def _diag_extrema(res) -> tuple[float, float]:
             min(d["phi_time"]["n_eff"], d["phi_freq"]["n_eff"]))
 
 
-def _shard_path(n_total: int) -> Path:
-    return FIG_DIR / f"sim_metrics_nt{n_total:05d}.npz"
+def _shard_path(n_total: int, freq_knots: int) -> Path:
+    return FIG_DIR / f"sim_metrics_kf{freq_knots:02d}_nt{n_total:05d}.npz"
 
 
-def _load_shards() -> tuple[np.ndarray, dict[str, list]]:
-    shards = sorted(FIG_DIR.glob("sim_metrics_nt*.npz"))
+def _load_shards(freq_knots: int) -> tuple[np.ndarray, dict[str, list]]:
+    shards = sorted(FIG_DIR.glob(f"sim_metrics_kf{freq_knots:02d}_nt*.npz"))
     if not shards:
-        raise FileNotFoundError(f"no sim_metrics_nt*.npz shards in {FIG_DIR}")
+        raise FileNotFoundError(
+            f"no matched-knot shards for {freq_knots} frequency knots in {FIG_DIR}"
+        )
     durations, raw = [], {k: [] for k in METRIC_KEYS}
     for path in shards:
         with np.load(path) as f:
@@ -157,7 +228,9 @@ def _load_shards() -> tuple[np.ndarray, dict[str, list]]:
     return np.asarray(durations), raw
 
 
-def _raw_to_dataframe(durations: np.ndarray, raw: dict[str, list]) -> pd.DataFrame:
+def _raw_to_dataframe(
+    durations: np.ndarray, raw: dict[str, list], freq_knots: int
+) -> pd.DataFrame:
     """Long-format table, one row per (duration, likelihood, repeat)."""
     rows = []
     for i, n_total in enumerate(durations):
@@ -166,13 +239,20 @@ def _raw_to_dataframe(durations: np.ndarray, raw: dict[str, list]) -> pd.DataFra
                       for suffix, name in METRIC_SUFFIX.items()}
             n_repeats = len(next(iter(columns.values())))
             for r in range(n_repeats):
-                rows.append({"n_total": int(n_total), "likelihood": likelihood,
+                rows.append({"n_total": int(n_total), "freq_knots": int(freq_knots),
+                            "likelihood": likelihood,
                             "repeat": r, **{k: float(v[r]) for k, v in columns.items()}})
     return pd.DataFrame(rows, columns=list(CSV_COLUMNS))
 
 
-def _dataframe_to_raw(df: pd.DataFrame) -> tuple[np.ndarray, dict[str, list]]:
+def _dataframe_to_raw(
+    df: pd.DataFrame, freq_knots: int
+) -> tuple[np.ndarray, dict[str, list]]:
     """Inverse of :func:`_raw_to_dataframe`, for re-rendering from an edited CSV."""
+    if "freq_knots" in df:
+        df = df[df["freq_knots"] == freq_knots]
+    if df.empty:
+        raise ValueError(f"CSV has no rows for freq_knots={freq_knots}.")
     durations = np.sort(df["n_total"].unique())
     inv_prefix = {v: k for k, v in LIKELIHOOD_PREFIX.items()}
     raw = {k: [] for k in METRIC_KEYS}
@@ -185,7 +265,9 @@ def _dataframe_to_raw(df: pd.DataFrame) -> tuple[np.ndarray, dict[str, list]]:
     return durations, raw
 
 
-def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
+def _render_metrics(
+    durations: np.ndarray, raw: dict[str, list], freq_knots: int
+) -> None:
     """Render the MSE / coverage / CI-width / runtime vs. n figure."""
     med = lambda key: np.array([np.median(a) for a in raw[key]])
     q = lambda key, p: np.array([np.percentile(a, p) for a in raw[key]])
@@ -225,60 +307,149 @@ def _render_metrics(durations: np.ndarray, raw: dict[str, list]) -> None:
     # auto-labels crowded minor ticks.
     ax_t.xaxis.set_major_locator(FixedLocator(list(durations)))
     ax_t.xaxis.set_minor_formatter(NullFormatter())
-    ax_t.set_xticklabels([f"{int(d)}" for d in durations])
+    ax_t.set_xticklabels([f"{int(d)}" for d in durations], rotation=35, ha="right")
+    ax_t.tick_params(axis="x", labelsize=7)
 
     fig.savefig(FIG_DIR / "sim_mse_coverage.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
-    csv_path = FIG_DIR / "sim_metrics.csv"
-    _raw_to_dataframe(durations, raw).to_csv(csv_path, index=False)
+    # Diagnostic decomposition: the common analytic target is the primary
+    # cross-method comparison; native expected-power targets show how much of
+    # each error comes from the representation rather than the surface fit.
+    fig, axes = plt.subplots(1, 2, figsize=(7.1, 2.7), constrained_layout=True,
+                             sharex=True, sharey=True)
+    for ax, common_key, native_key, title in (
+        (axes[0], "wm", "wn", "WDM"),
+        (axes[1], "tm", "tn", "Moving periodogram"),
+    ):
+        ax.loglog(durations, med(common_key), "o-", label="analytic PSD")
+        ax.loglog(durations, med(native_key), "s--", label="native expected power")
+        ax.set_title(title)
+        ax.set_xlabel("Number of observations $n$")
+    axes[0].set_ylabel(r"$\mathrm{MSE}_{\log f}$")
+    axes[1].legend(fontsize=8)
+    fig.savefig(
+        FIG_DIR / f"sim_mse_targets_kf{freq_knots:02d}.png",
+        dpi=200,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+
+    csv_path = FIG_DIR / f"sim_metrics_kf{freq_knots:02d}.csv"
+    frame = _raw_to_dataframe(durations, raw, freq_knots)
+    frame.to_csv(csv_path, index=False)
+    if freq_knots == DEFAULT_FREQ_KNOTS:
+        frame.to_csv(FIG_DIR / "sim_metrics.csv", index=False)
     print(f"Wrote {csv_path}")
+
+
+def _render_knot_sensitivity() -> None:
+    """Render a diagnostic comparison across every complete knot-count study."""
+    loaded = {}
+    for knots in KNOT_SENSITIVITY:
+        try:
+            loaded[knots] = _load_shards(knots)
+        except FileNotFoundError:
+            continue
+    if len(loaded) < 2:
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(7.1, 2.7), constrained_layout=True,
+                             sharex=True, sharey=True)
+    colors = dict(zip(KNOT_SENSITIVITY, ("tab:green", "tab:blue", "tab:purple")))
+    for knots, (durations, raw) in loaded.items():
+        for ax, key, title in ((axes[0], "wm", "WDM"), (axes[1], "tm", "Moving periodogram")):
+            med = np.array([np.median(a) for a in raw[key]])
+            ax.loglog(durations, med, "o-", color=colors[knots], label=f"{knots} knots")
+            ax.set_title(title)
+            ax.set_xlabel("Number of observations $n$")
+    axes[0].set_ylabel(r"$\mathrm{MSE}_{\log f}$")
+    axes[1].legend(fontsize=8)
+    fig.savefig(FIG_DIR / "sim_knot_sensitivity.png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _finite_resolution_references(nt, config, n_draws):
+    n_total = nt * NF
+    wdm_reference = monte_carlo_reference(
+        lambda rng: simulate_ls2(n_total, rng=rng),
+        n_draws=n_draws,
+        n_total=n_total,
+        dt=DT,
+        nt=nt,
+        config=config,
+        seed=8100 + nt,
+    )
+    rng = np.random.default_rng(9100 + nt)
+    moving_reference = None
+    for _ in range(n_draws):
+        mi = tang_moving_periodogram(
+            simulate_ls2(n_total, rng=rng), m=TANG_M, thin=TANG_THIN
+        )["mi"]
+        if moving_reference is None:
+            moving_reference = np.zeros_like(mi)
+        moving_reference += mi
+    return wdm_reference, moving_reference / n_draws
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeats", type=int, default=100)
+    parser.add_argument("--freq-knots", type=int, default=DEFAULT_FREQ_KNOTS,
+                        help="Common interior frequency-knot count for both front ends.")
+    parser.add_argument("--reference-draws", type=int, default=1000,
+                        help="Monte Carlo draws for each finite-resolution target.")
     parser.add_argument("--nt", type=int, nargs="*", default=list(NT_VALUES),
                         help="Time-bin counts to fit (each saved as its own shard); "
-                             "pass with no values to make Fig 1 and re-render only.")
+                             "pass with no values to make the single-realisation panel.")
     parser.add_argument("--skip-fig1", action="store_true",
                         help="Skip the single-realization triptych (for shard jobs).")
+    parser.add_argument("--skip-render", action="store_true",
+                        help="Write requested shards without rendering shared figures.")
     parser.add_argument("--render-only", action="store_true",
-                        help="Re-render Figure 2 from the saved shards (no refits).")
+                        help="Re-render Figure 3 from the saved shards (no refits).")
     parser.add_argument("--from-csv", type=Path, default=None,
-                        help="Re-render Figure 2 from a (possibly hand-edited) "
+                        help="Re-render Figure 3 from a (possibly hand-edited) "
                              "sim_metrics.csv instead of the npz shards.")
     args = parser.parse_args()
+    if args.freq_knots < 1:
+        parser.error("--freq-knots must be positive")
+    if args.reference_draws < 1:
+        parser.error("--reference-draws must be positive")
     FIG_DIR.mkdir(parents=True, exist_ok=True)
 
     if args.from_csv is not None:
-        durations, raw = _dataframe_to_raw(pd.read_csv(args.from_csv))
-        _render_metrics(durations, raw)
-        print(f"Fig 2 re-rendered from {args.from_csv}")
+        durations, raw = _dataframe_to_raw(pd.read_csv(args.from_csv), args.freq_knots)
+        _render_metrics(durations, raw, args.freq_knots)
+        _render_knot_sensitivity()
+        print(f"Figure 3 re-rendered from {args.from_csv}")
         return
 
     if args.render_only:
-        durations, raw = _load_shards()
-        _render_metrics(durations, raw)
-        print(f"Fig 2 re-rendered from {len(durations)} shards in {FIG_DIR}")
+        durations, raw = _load_shards(args.freq_knots)
+        _render_metrics(durations, raw, args.freq_knots)
+        _render_knot_sensitivity()
+        print(f"Figure 3 re-rendered from {len(durations)} shards in {FIG_DIR}")
         return
 
     log_f0_common = np.log(true_psd_ls2(U_COMMON, F_COMMON, DT) + 1e-12)
     cal_tang = _tang_calibration()
 
-    # --- Figure 1: single-realization triptych at the largest duration ---
+    # --- Single-realization triptych at the largest duration. ---
     if not args.skip_fig1:
         nt0 = NT_VALUES[-1]
-        cal_wdm0 = wdm_white_noise_calibration(nt0 * NF, DT, nt0, _configs(nt0)[0])
+        cfg_wdm0, _ = _configs(nt0, args.freq_knots)
+        cal_wdm0 = wdm_white_noise_calibration(
+            nt0 * NF, DT, nt0, cfg_wdm0, n_draws=args.reference_draws
+        )
         data0 = simulate_ls2(nt0 * NF, rng=np.random.default_rng(0))
-        rw0, rt0 = _fit_both(data0, nt0, 0, cal_wdm0, cal_tang)
+        rw0, rt0 = _fit_both(data0, nt0, 0, args.freq_knots)
         panels = [
             (log_f0_common, r"Truth: $\log f_0(t,f)$"),
-            (_to_common(rw0["time_grid"], rw0["freq_grid"],
-                        np.log(rw0["psd_mean"] / cal_wdm0[None, :] + 1e-12)),
+            (_log_surface_samples(rw0, U_COMMON, F_COMMON, "wdm").mean(axis=0)
+             - np.interp(F_COMMON, rw0["freq_grid"], np.log(cal_wdm0))[None, :],
              "WDM"),
-            (_to_common(rt0["time_grid"], rt0["freq_grid"],
-                        np.log(rt0["psd_mean"] / cal_tang + 1e-12)),
+            (_log_surface_samples(rt0, U_COMMON, F_COMMON, "mp").mean(axis=0)
+             - np.log(cal_tang),
              "Moving periodogram"),
         ]
         vmin = min(p.min() for p, _ in panels)
@@ -293,46 +464,61 @@ def main() -> None:
         fig.colorbar(mesh, ax=axes, shrink=0.85, label="$\\log f$")
         fig.savefig(FIG_DIR / "sim_three_panel.png", dpi=160, bbox_inches="tight")
         plt.close(fig)
-        print(f"Fig 1 saved (WDM div={rw0['divergences']}, MP div={rt0['divergences']})")
+        print(f"Triptych saved (WDM div={rw0['divergences']}, MP div={rt0['divergences']})")
 
-    # --- Figure 2: MSE, coverage, CI width, and runtime vs observations ---
+    # --- Figure 3: MSE, coverage, CI width, and runtime vs observations. ---
     # Keep every repeat so we can show the spread (median + interquartile band).
     div_total = 0
     for nt in args.nt:
         n_total = nt * NF
-        cal_wdm = wdm_white_noise_calibration(n_total, DT, nt, _configs(nt)[0])
+        cfg_wdm, _ = _configs(nt, args.freq_knots)
+        cal_wdm = wdm_white_noise_calibration(
+            n_total, DT, nt, cfg_wdm, n_draws=args.reference_draws
+        )
+        ref_wdm, ref_tang = _finite_resolution_references(
+            nt, cfg_wdm, args.reference_draws
+        )
         rep = {k: [] for k in METRIC_KEYS}
         t0 = time.time()
         for r in range(args.repeats):
             seed = 6000 + r
             data = simulate_ls2(n_total, rng=np.random.default_rng(seed))
-            rw, rt = _fit_both(data, nt, seed, cal_wdm, cal_tang)
+            rw, rt = _fit_both(data, nt, seed, args.freq_knots)
             div_total += rw["divergences"] + rt["divergences"]
-            mw, cw, ww = _metrics(rw, cal_wdm, log_f0_common)
-            mt, ct, wt = _metrics(rt, cal_tang, log_f0_common)
+            mw, cw, ww, nw = _metrics(
+                rw, cal_wdm, log_f0_common, "wdm", ref_wdm
+            )
+            mt, ct, wt, ntarget = _metrics(
+                rt, cal_tang, log_f0_common, "mp", ref_tang
+            )
             rhat_w, neff_w = _diag_extrema(rw)
             rhat_t, neff_t = _diag_extrema(rt)
             rep["wm"].append(mw); rep["tm"].append(mt)
             rep["wc"].append(cw); rep["tc"].append(ct)
             rep["ww"].append(ww); rep["tw"].append(wt)
+            rep["wn"].append(nw); rep["tn"].append(ntarget)
             rep["wt"].append(rw["nuts_runtime_s"]); rep["tt"].append(rt["nuts_runtime_s"])
             rep["wr"].append(rhat_w); rep["tr"].append(rhat_t)
             rep["we"].append(neff_w); rep["te"].append(neff_t)
-        np.savez(_shard_path(n_total), n_total=n_total, repeats=args.repeats,
+        np.savez(_shard_path(n_total, args.freq_knots), n_total=n_total,
+                 freq_knots=args.freq_knots, repeats=args.repeats,
                  **{f"{k}_samples": np.asarray(rep[k]) for k in METRIC_KEYS})
         print(f"n={n_total:6d}  WDM mse={np.median(rep['wm']):.3f} "
               f"cov={np.mean(rep['wc']):.2f} ciw={np.median(rep['ww']):.2f} "
               f"t={np.median(rep['wt']):.1f}s rhat<={np.max(rep['wr']):.3f} "
-              f"neff>={np.min(rep['we']):.0f}  "
+              f"native={np.median(rep['wn']):.3f} neff>={np.min(rep['we']):.0f}  "
               f"MP mse={np.median(rep['tm']):.3f} cov={np.mean(rep['tc']):.2f} "
               f"ciw={np.median(rep['tw']):.2f} t={np.median(rep['tt']):.1f}s "
+              f"native={np.median(rep['tn']):.3f} "
               f"rhat<={np.max(rep['tr']):.3f} neff>={np.min(rep['te']):.0f}  "
               f"({time.time()-t0:.0f}s)")
     print(f"total divergences: {div_total}  ({args.repeats} repeats/point)")
 
-    durations, raw = _load_shards()
-    _render_metrics(durations, raw)
-    print(f"Fig 2 saved to {FIG_DIR}")
+    if not args.skip_render:
+        durations, raw = _load_shards(args.freq_knots)
+        _render_metrics(durations, raw, args.freq_knots)
+        _render_knot_sensitivity()
+        print(f"Figure 3 saved to {FIG_DIR}")
 
 
 if __name__ == "__main__":

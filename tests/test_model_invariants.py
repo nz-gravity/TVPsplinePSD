@@ -175,5 +175,10 @@ def test_gibbs_joint_smoke_for_both_parameterizations() -> None:
         )
         assert np.isfinite(result["psd_geometric_mean"]).all()
         assert result["psd_mean"] is result["psd_geometric_mean"]
+        np.testing.assert_allclose(result["knots_time_physical"], result["knots_time"])
+        np.testing.assert_allclose(
+            result["knots_freq_physical"],
+            result["knots_freq"] * result["freq_grid"][-1],
+        )
         beta_means.append(np.asarray(result["beta_mean"]))
     np.testing.assert_allclose(beta_means[0], beta_means[1], rtol=1.0, atol=1.0)

@@ -87,7 +87,7 @@ def single_fit(n_warmup: int, n_samples: int, n_reference_draws: int) -> None:
     print(f"90% coverage vs E[w^2] : {interval_coverage(reference, res['psd_lower'], res['psd_upper']):.2f}")
 
     plot_surface_comparison(
-        res, reference, freq_scale=1e3, freq_label="Frequency [mHz]",
+        res, reference, freq_scale=1e3, freq_label="Frequency [mHz]", show_knots=True,
         path=RESULTS_DIR / "lisa_surface_comparison.png",
     )
     # Pick the channel with the largest temporal coefficient of variation: the

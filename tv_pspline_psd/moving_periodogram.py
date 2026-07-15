@@ -302,6 +302,8 @@ def run_tang_dynamic_whittle_mcmc(
     m: int,
     thin: int = 2,
     config: PSplineConfig,
+    interior_knots_time: np.ndarray | None = None,
+    interior_knots_freq: np.ndarray | None = None,
     n_time_grid: int = 60,
     n_warmup: int = 250,
     n_samples: int = 300,
@@ -315,6 +317,10 @@ def run_tang_dynamic_whittle_mcmc(
     """Fit the thinned dynamic-Whittle model and evaluate the PSD on a grid.
 
     ``thin`` reduces dependence between overlapping moving windows.
+    ``interior_knots_time`` and ``interior_knots_freq`` optionally provide
+    explicit interior knots in rescaled-time and Hz coordinates respectively.
+    They are useful for controlled comparisons with another front end: both
+    likelihoods can then use the same spline dimension and physical locations.
     ``time_bin`` and ``freq_bin`` subsequently pool the retained ordinates using
     the same summed-power/count likelihood used by the WDM/STFT front ends.
     ``freq_bin_starts`` supplies a variable-width frequency partition (and
@@ -334,12 +340,44 @@ def run_tang_dynamic_whittle_mcmc(
     summed_power = observations["summed_power"]
     counts = observations["counts"]
     freq_unit = omega / np.pi  # in (0, 1)
+    freq_hz = omega / (2.0 * np.pi * dt)
+
+    def _explicit_knots(values, grid, expected, name):
+        if values is None:
+            return None
+        values = np.asarray(values, dtype=float)
+        if values.ndim != 1 or values.size != expected:
+            raise ValueError(
+                f"{name} must be one-dimensional with exactly {expected} values."
+            )
+        if not np.isfinite(values).all() or np.any(np.diff(values) <= 0):
+            raise ValueError(f"{name} must contain finite, strictly increasing values.")
+        if np.any(values <= grid.min()) or np.any(values >= grid.max()):
+            raise ValueError(f"{name} must lie strictly inside the analysis-grid range.")
+        return values
+
+    explicit_time = _explicit_knots(
+        interior_knots_time,
+        ordinates["u"],
+        config.n_interior_knots_time,
+        "interior_knots_time",
+    )
+    explicit_freq_hz = _explicit_knots(
+        interior_knots_freq,
+        freq_hz,
+        config.n_interior_knots_freq,
+        "interior_knots_freq",
+    )
+    explicit_freq_unit = (
+        None if explicit_freq_hz is None else 2.0 * dt * explicit_freq_hz
+    )
 
     # Define the spline domain on the original ordinate range, then evaluate
     # the likelihood basis at the coarse cell centres. Otherwise binning would
     # inadvertently shrink the fitted domain at both boundary bins.
     _, knots_time = create_bspline_basis(
-        ordinates["u"], config.n_interior_knots_time, degree=config.degree_time
+        ordinates["u"], config.n_interior_knots_time, degree=config.degree_time,
+        interior_knots=explicit_time,
     )
     B_time = evaluate_bspline_basis(u, knots_time, degree=config.degree_time)
     unique_freq_unit = np.unique(freq_unit)
@@ -347,6 +385,7 @@ def run_tang_dynamic_whittle_mcmc(
         np.unique(ordinates["omega"]) / np.pi,
         config.n_interior_knots_freq,
         degree=config.degree_freq,
+        interior_knots=explicit_freq_unit,
     )
     B_freq_unique = evaluate_bspline_basis(
         unique_freq_unit, knots_freq, degree=config.degree_freq
@@ -407,6 +446,10 @@ def run_tang_dynamic_whittle_mcmc(
         source_data={"shape": list(np.asarray(data).shape)},
     )
     fit_provenance["moving_periodogram"] = {"m": int(m), "thin": int(thin)}
+    fit_provenance["knot_allocation"] = {
+        "time": "explicit" if explicit_time is not None else "linear",
+        "frequency": "explicit" if explicit_freq_hz is not None else "linear",
+    }
     fit_provenance["binning"] = binning_provenance(
         n_time=n_time_original,
         n_freq=n_freq_original,
@@ -417,6 +460,7 @@ def run_tang_dynamic_whittle_mcmc(
     )
     return {
         "mcmc": mcmc,
+        "config": config,
         "ordinates": ordinates,
         "power_observations": observations,
         "time_bin": time_bin,
@@ -425,6 +469,12 @@ def run_tang_dynamic_whittle_mcmc(
         "time_grid": dense_u,
         "freq_grid": freq_grid_hz,
         "omega_grid": omega_grid,
+        "knots_time": knots_time,
+        "knots_freq": knots_freq,
+        "knots_time_physical": knots_time.copy(),
+        "knots_freq_physical": knots_freq / (2.0 * dt),
+        "whitened": whitened,
+        "eig_coeff_samples": eig_samples,
         "log_psd_mean": log_psd_mean,
         "psd_geometric_mean": psd_geometric_mean,
         "psd_mean": psd_geometric_mean,  # Deprecated compatibility alias.

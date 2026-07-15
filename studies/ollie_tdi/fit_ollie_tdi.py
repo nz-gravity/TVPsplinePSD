@@ -29,6 +29,7 @@ from scipy.signal import welch
 
 from tv_pspline_psd import (
     PSplineConfig,
+    plot_surface_knots,
     run_wdm_psd_mcmc,
     set_paper_style,
     summarize_mcmc_diagnostics,
@@ -134,6 +135,11 @@ def main() -> None:
     axes[0].set_title("raw WDM log power")
     mesh1 = axes[1].pcolormesh(tg_days, fg * 1e3, np.log(S_est).T, shading="auto",
                                cmap="viridis", vmin=mesh0.get_clim()[0], vmax=mesh0.get_clim()[1])
+    plot_surface_knots(
+        axes[1], res,
+        time_transform=lambda values: values * n_total * dt / 86400.0,
+        freq_transform=lambda values: values * 1e3,
+    )
     axes[1].set_title(r"posterior mean $\log \hat S(t,f)$")
     for ax in axes:
         ax.set_xlabel("time [days]")

@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=ls2_coarse
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
-#SBATCH --time=06:00:00
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=4G
+#SBATCH --time=01:00:00
 #SBATCH --array=0-9
-#SBATCH --output=logs/ls2_coarse_%j.out
+#SBATCH --output=logs/ls2_coarse_%A_%a.out
 
 # Submit from the repository root:
 #   sbatch studies/slurm/ls2_coarse_graining.sh
