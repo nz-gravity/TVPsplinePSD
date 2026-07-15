@@ -6,8 +6,9 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/ls2_render_%j.out
 
-# Make the single-realization triptych (Fig 1) and re-render Fig 2 from the
-# per-duration shards. Run after the ls2_sim_study.sh array completes:
+# Re-render Figure 3 from the per-duration shards. Run after either LS2 array
+# completes; this deliberately does not launch an additional largest-duration
+# MCMC fit merely to refresh the illustrative triptych.
 #   sbatch --dependency=afterok:<array_job_id> studies/slurm/ls2_render.sh
 # Then copy studies/paper_figures/figures/sim_* back locally.
 
@@ -18,7 +19,7 @@ source /fred/oz303/avajpeyi/codes/TVPsplinePSD/.venv/bin/activate
 set -euo pipefail
 
 export JAX_PLATFORMS=cpu
-# --nt with no values: fit nothing, make the single-realisation panel, render
-# the primary 8-knot Figure 3, and render the 6/8/10-knot sensitivity figure.
+# Primary 8-knot Figure 3. A complete 6/8/10 sensitivity plot is emitted only
+# after all three knot counts share the same duration grid.
 python studies/paper_figures/scripts/make_sim_study_figures.py \
-    --nt --freq-knots 8 --reference-draws "${REFERENCE_DRAWS:-1000}"
+    --render-only --freq-knots 8

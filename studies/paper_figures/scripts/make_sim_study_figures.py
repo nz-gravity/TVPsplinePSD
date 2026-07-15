@@ -353,6 +353,12 @@ def _render_knot_sensitivity() -> None:
             continue
     if len(loaded) < 2:
         return
+    duration_sets = {tuple(durations) for durations, _ in loaded.values()}
+    if len(duration_sets) != 1:
+        # A staged pilot may deliberately run knot sensitivity only at the
+        # shortest and longest records. Do not render an apples-to-oranges
+        # multi-knot curve until every available count shares the same n grid.
+        return
     fig, axes = plt.subplots(1, 2, figsize=(7.1, 2.7), constrained_layout=True,
                              sharex=True, sharey=True)
     colors = dict(zip(KNOT_SENSITIVITY, ("tab:green", "tab:blue", "tab:purple")))
