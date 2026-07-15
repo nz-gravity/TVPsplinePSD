@@ -194,9 +194,18 @@ def test_dynamic_whittle_smoke() -> None:
         random_seed=5,
         time_bin=2,
         freq_bin=2,
+        binning_metadata={"time": {"method": "fixed"}},
     )
     assert result["psd_mean"].shape == (12, 8)
     assert np.isfinite(result["psd_mean"]).all()
     assert result["power_observations"]["counts"].sum() == 2 * len(
         result["ordinates"]["mi"]
     )
+    recipe = result["provenance"]["binning"]
+    assert recipe["output_shape"] == [
+        int(np.ceil(recipe["input_shape"][0] / 2)),
+        int(np.ceil(recipe["input_shape"][1] / 2)),
+    ]
+    assert recipe["time"]["bin_size"] == 2
+    assert recipe["frequency"]["bin_size"] == 2
+    assert recipe["selector"]["time"]["method"] == "fixed"

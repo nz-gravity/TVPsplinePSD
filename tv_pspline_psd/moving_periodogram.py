@@ -19,6 +19,7 @@ time-frequency representation and its surface evaluator differ.
 from __future__ import annotations
 
 import time
+from typing import Any, Mapping
 
 import jax.numpy as jnp
 import numpy as np
@@ -34,6 +35,7 @@ from .model import (
     whiten_penalty_pair,
     whitened_init_values,
 )
+from .provenance import binning_provenance, provenance
 from .splines import (
     create_bspline_basis,
     create_bspline_roughness_penalty,
@@ -308,6 +310,7 @@ def run_tang_dynamic_whittle_mcmc(
     time_bin: int = 1,
     freq_bin: int = 1,
     freq_bin_starts: np.ndarray | None = None,
+    binning_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     """Fit the thinned dynamic-Whittle model and evaluate the PSD on a grid.
 
@@ -316,7 +319,8 @@ def run_tang_dynamic_whittle_mcmc(
     the same summed-power/count likelihood used by the WDM/STFT front ends.
     ``freq_bin_starts`` supplies a variable-width frequency partition (and
     requires ``freq_bin=1``), including one obtained from the same adaptive
-    pilot used for WDM.
+    pilot used for WDM. ``binning_metadata`` can record the JSON-serializable
+    pilot settings; the realised partition is always retained in provenance.
     """
     ordinates = tang_moving_periodogram(data, m=m, thin=thin)
     observations = bin_tang_ordinates(
@@ -394,6 +398,23 @@ def run_tang_dynamic_whittle_mcmc(
 
     log_psd_mean = np.mean(log_psd_grid, axis=0)
     psd_geometric_mean = np.exp(log_psd_mean)
+    n_freq_original = np.unique(ordinates["omega"]).size
+    n_time_original = ordinates["mi"].size // n_freq_original
+    fit_provenance = provenance(
+        seed=random_seed,
+        dt=dt,
+        config=config,
+        source_data={"shape": list(np.asarray(data).shape)},
+    )
+    fit_provenance["moving_periodogram"] = {"m": int(m), "thin": int(thin)}
+    fit_provenance["binning"] = binning_provenance(
+        n_time=n_time_original,
+        n_freq=n_freq_original,
+        time_bin=time_bin,
+        freq_bin=freq_bin,
+        freq_bin_starts=freq_bin_starts,
+        selector_metadata=binning_metadata,
+    )
     return {
         "mcmc": mcmc,
         "ordinates": ordinates,
@@ -411,4 +432,5 @@ def run_tang_dynamic_whittle_mcmc(
         "psd_upper": np.exp(np.percentile(log_psd_grid, 95.0, axis=0)),
         "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
         "nuts_runtime_s": float(nuts_runtime_s),
+        "provenance": fit_provenance,
     }

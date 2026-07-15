@@ -32,7 +32,10 @@ from tv_pspline_psd import (
     fit_log_pspline_surface,
     summarize_mcmc_diagnostics,
 )
-from tv_pspline_psd.adaptive_knots import fit_adaptive_knots
+from tv_pspline_psd.adaptive_knots import (
+    fit_adaptive_knots,
+    fit_running_median_chi2_knots,
+)
 from tv_pspline_psd.inference import reconstruct_eig_coeff_samples
 from tv_pspline_psd.model import power_floor
 from tv_pspline_psd.splines import create_adaptive_time_knots, evaluate_bspline_basis
@@ -44,10 +47,10 @@ OUTDIR = RESULTS / "nuts_confirmation"
 LOG_2PI = float(np.log(2.0 * np.pi))
 
 
-def holdout_rows(n_time: int) -> np.ndarray:
+def holdout_rows(n_time: int, offset: int = 4) -> np.ndarray:
     """The same deterministic two-row-in-ten blocks as the MAP screen."""
     index = np.arange(n_time)
-    mask = ((index % 10) == 4) | ((index % 10) == 5)
+    mask = ((index % 10) == offset) | ((index % 10) == ((offset + 1) % 10))
     mask[[0, -1]] = False
     return mask
 
@@ -137,6 +140,13 @@ def main() -> None:
     parser.add_argument("--adaptive-method", choices=("curvature", "deviance", "hybrid"), default="curvature")
     parser.add_argument("--pilot-penalty", type=float, default=2.0)
     parser.add_argument("--pilot-coarsen-freq", type=int, default=1)
+    parser.add_argument("--chi2-window-hz", type=float, default=5e-4)
+    parser.add_argument("--fmax", type=float, default=None)
+    parser.add_argument("--holdout-offset", type=int, default=4, choices=range(10))
+    parser.add_argument(
+        "--strategies", nargs="+", choices=("current", "adaptive_map", "chi2_freq"),
+        default=("current", "adaptive_map"),
+    )
     parser.add_argument("--n-warmup", type=int, default=250)
     parser.add_argument("--n-samples", type=int, default=250)
     parser.add_argument("--num-chains", type=int, default=2)
@@ -156,7 +166,13 @@ def main() -> None:
     coeffs = np.asarray(cached["coeffs"])
     time_grid = np.asarray(cached["time_grid"])
     freq_grid = np.asarray(cached["freq_grid"])
-    test = holdout_rows(time_grid.size)
+    if args.fmax is not None:
+        keep = freq_grid <= args.fmax
+        if np.count_nonzero(keep) < args.freq_knots + 8:
+            raise ValueError("--fmax leaves too few channels for the requested knot count")
+        coeffs = coeffs[:, keep]
+        freq_grid = freq_grid[keep]
+    test = holdout_rows(time_grid.size, args.holdout_offset)
     train = ~test
     power_train = coeffs[train] ** 2
 
@@ -183,6 +199,12 @@ def main() -> None:
         penalty_freq=args.pilot_penalty,
     )
     pilot_runtime = time.perf_counter() - pilot_started
+    chi2_allocation = fit_running_median_chi2_knots(
+        power_train,
+        freq_grid,
+        args.freq_knots,
+        median_window_hz=args.chi2_window_hz,
+    )
 
     config = PSplineConfig(
         n_interior_knots_time=args.time_knots,
@@ -193,10 +215,12 @@ def main() -> None:
         trim_low_freq_channels=4,
         trim_high_freq_channels=1,
     )
-    strategies = {
+    available_strategies = {
         "current": uniform_freq_knots,
         "adaptive_map": allocation.freq_knots,
+        "chi2_freq": chi2_allocation.knots,
     }
+    strategies = {name: available_strategies[name] for name in args.strategies}
     args.outdir.mkdir(parents=True, exist_ok=True)
     summary: dict[str, object] = {
         "cache": str(CACHE),
@@ -210,6 +234,12 @@ def main() -> None:
             "success": allocation.pilot.success,
             "objective": allocation.pilot.penalized_objective,
             "freq_knots": allocation.freq_knots,
+        },
+        "chi2": {
+            "threshold": chi2_allocation.threshold,
+            "residual_scale": chi2_allocation.residual_scale,
+            "window_bins": chi2_allocation.window_bins,
+            "freq_knots": chi2_allocation.knots,
         },
         "arguments": vars(args),
         "strategies": {},

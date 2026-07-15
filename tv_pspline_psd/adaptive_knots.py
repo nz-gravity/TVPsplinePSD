@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.ndimage import median_filter
 from scipy.optimize import minimize
 
 from .splines import (
@@ -73,6 +74,17 @@ class AdaptiveKnotResult:
     time_density: np.ndarray
     freq_density: np.ndarray
     method: str
+
+
+@dataclass(frozen=True)
+class ChiSquareKnotResult:
+    """FastSpec-inspired knots from linear fits to a running-median spectrum."""
+
+    knots: np.ndarray
+    running_median_log_power: np.ndarray
+    threshold: float
+    residual_scale: float
+    window_bins: int
 
 
 def _validated_statistics(
@@ -317,6 +329,146 @@ def allocate_knots_from_density(
     targets = np.arange(1, n_interior_knots + 1) / (n_interior_knots + 1)
     knots = np.interp(targets, cdf, grid)
     return _project_min_spacing(knots, grid[0], grid[-1], min_spacing)
+
+
+def fit_running_median_chi2_knots(
+    power: np.ndarray,
+    freq_grid: np.ndarray,
+    n_interior_knots: int,
+    *,
+    median_window_hz: float,
+    min_window_bins: int = 4,
+    min_spacing_fraction: float = 0.2,
+) -> ChiSquareKnotResult:
+    """Allocate a fixed knot budget with FastSpec-style linear-fit windows.
+
+    The input may be a single power spectrum or a ``(time, frequency)`` power
+    array.  For a surface, the pilot spectrum is the pointwise median over
+    time.  A running median suppresses individual noisy cells, then a window
+    grows from low to high frequency until the chi-square of a linear fit to
+    the running-median log power crosses a threshold.  The threshold is found
+    by bisection so the output uses the requested fixed knot budget.
+
+    This deliberately adapts FastSpec's placement idea rather than its model
+    dimension: the P-spline basis size remains fixed for NumPyro/NUTS.
+    """
+    freq = np.asarray(freq_grid, dtype=float)
+    values = np.asarray(power, dtype=float)
+    if freq.ndim != 1 or freq.size < 3 or np.any(np.diff(freq) <= 0):
+        raise ValueError("freq_grid must be a strictly increasing 1D array.")
+    if values.ndim == 1:
+        if values.shape != freq.shape:
+            raise ValueError("1D power must match freq_grid.")
+        profile = values
+    elif values.ndim == 2:
+        if values.shape[1] != freq.size or values.shape[0] == 0:
+            raise ValueError("2D power must have shape (time, len(freq_grid)).")
+        profile = np.median(values, axis=0)
+    else:
+        raise ValueError("power must be one- or two-dimensional.")
+    if not np.isfinite(values).all() or np.any(values < 0) or not np.any(values > 0):
+        raise ValueError("power must be finite, non-negative, and contain a positive value.")
+    if not isinstance(n_interior_knots, int) or n_interior_knots < 0:
+        raise ValueError("n_interior_knots must be a non-negative integer.")
+    if n_interior_knots == 0:
+        return ChiSquareKnotResult(
+            knots=np.array([], dtype=float),
+            running_median_log_power=np.log(np.maximum(profile, np.min(values[values > 0]))),
+            threshold=np.inf,
+            residual_scale=1.0,
+            window_bins=1,
+        )
+    if median_window_hz <= 0 or not np.isfinite(median_window_hz):
+        raise ValueError("median_window_hz must be finite and positive.")
+    if not isinstance(min_window_bins, int) or min_window_bins < 3:
+        raise ValueError("min_window_bins must be an integer of at least 3.")
+    if min_window_bins * (n_interior_knots + 1) >= freq.size:
+        raise ValueError("frequency grid is too short for the knot and window counts.")
+
+    df = float(np.median(np.diff(freq)))
+    window_bins = max(3, int(round(median_window_hz / df)))
+    window_bins += 1 - window_bins % 2
+    positive = values[values > 0]
+    floor = float(np.min(positive) * 0.5)
+    running = median_filter(np.maximum(profile, floor), size=window_bins, mode="nearest")
+    log_running = np.log(running)
+
+    differences = np.diff(log_running)
+    mad = np.median(np.abs(differences - np.median(differences)))
+    residual_scale = float(max(1.4826 * mad / np.sqrt(2.0), np.finfo(float).eps))
+    # Removing the arbitrary log-power offset improves the prefix-sum RSS
+    # numerics and makes placement exactly invariant to physical power units.
+    y = (log_running - log_running[0]) / residual_scale
+    x = np.arange(freq.size, dtype=float)
+    sx = np.concatenate(([0.0], np.cumsum(x)))
+    sy = np.concatenate(([0.0], np.cumsum(y)))
+    sxx = np.concatenate(([0.0], np.cumsum(x * x)))
+    sxy = np.concatenate(([0.0], np.cumsum(x * y)))
+    syy = np.concatenate(([0.0], np.cumsum(y * y)))
+
+    def linear_rss(start: int, stop: int) -> float:
+        count = stop - start + 1
+        sum_x = sx[stop + 1] - sx[start]
+        sum_y = sy[stop + 1] - sy[start]
+        sum_xx = sxx[stop + 1] - sxx[start]
+        sum_xy = sxy[stop + 1] - sxy[start]
+        sum_yy = syy[stop + 1] - syy[start]
+        denominator = count * sum_xx - sum_x * sum_x
+        explained = (
+            sum_xx * sum_y * sum_y
+            - 2.0 * sum_x * sum_y * sum_xy
+            + count * sum_xy * sum_xy
+        ) / max(denominator, np.finfo(float).tiny)
+        return float(max(sum_yy - explained, 0.0))
+
+    def window_ends(threshold: float) -> np.ndarray:
+        ends: list[int] = []
+        start = 0
+        last = freq.size - 1
+        while start + min_window_bins < last:
+            selected = last
+            for stop in range(start + min_window_bins - 1, last + 1):
+                if linear_rss(start, stop) > threshold:
+                    selected = stop
+                    break
+            if selected >= last:
+                break
+            ends.append(selected)
+            start = selected
+        return np.asarray(ends, dtype=int)
+
+    low = 0.0
+    high = max(linear_rss(0, freq.size - 1), 1.0)
+    while window_ends(high).size > n_interior_knots:
+        high *= 2.0
+    best_threshold = high
+    best_ends = window_ends(high)
+    for _ in range(80):
+        middle = 0.5 * (low + high)
+        ends = window_ends(middle)
+        if abs(ends.size - n_interior_knots) < abs(best_ends.size - n_interior_knots):
+            best_threshold, best_ends = middle, ends
+        if ends.size > n_interior_knots:
+            low = middle
+        else:
+            high = middle
+            if ends.size == n_interior_knots:
+                best_threshold, best_ends = middle, ends
+
+    if best_ends.size != n_interior_knots:
+        raise RuntimeError(
+            "could not calibrate the chi-square threshold to the requested knot count; "
+            f"nearest count was {best_ends.size}"
+        )
+    spacing = min_spacing_fraction * (freq[-1] - freq[0]) / (n_interior_knots + 1)
+    knots = _project_min_spacing(freq[best_ends], freq[0], freq[-1], spacing)
+    return ChiSquareKnotResult(
+        knots=knots,
+        running_median_log_power=log_running,
+        threshold=float(best_threshold),
+        residual_scale=residual_scale,
+        window_bins=window_bins,
+    )
 
 
 def fit_adaptive_knots(

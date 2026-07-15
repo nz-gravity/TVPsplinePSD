@@ -136,13 +136,30 @@ def main() -> None:
         random_seed=17,
         progress_bar=True,
     )
+    adaptive_binning_metadata = {
+        "frequency": {
+            "method": "greedy_pilot_log_psd_range",
+            "max_log_range": args.adaptive_log_range,
+            "max_bin": args.adaptive_max_bin,
+            "pilot": {
+                "quantity": "log(power + power_floor(power))",
+                "smoother": "scipy.ndimage.gaussian_filter",
+                "sigma": [3.0, 12.0],
+                "mode": "nearest",
+            },
+        }
+    }
     specifications = {
         "exact": {},
         "uniform_frequency": {"freq_bin": args.uniform_freq_bin},
-        "adaptive_frequency": {"freq_bin_starts": adaptive_starts},
+        "adaptive_frequency": {
+            "freq_bin_starts": adaptive_starts,
+            "binning_metadata": adaptive_binning_metadata,
+        },
         "adaptive_frequency_time2": {
             "freq_bin_starts": adaptive_starts,
             "time_bin": 2,
+            "binning_metadata": adaptive_binning_metadata,
         },
     }
 

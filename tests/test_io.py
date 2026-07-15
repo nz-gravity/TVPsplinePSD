@@ -24,6 +24,8 @@ def test_save_load_regenerates_surface(tmp_path):
     res = run_wdm_psd_mcmc(
         data, dt=0.1, nt=24, config=config,
         n_warmup=10, n_samples=10, random_seed=0,
+        time_bin=2,
+        binning_metadata={"time": {"method": "fixed", "requested_width": 2}},
     )
     # The per-sample surface must never be stored -- only the tiny sites are kept.
     assert "log_psd" not in res["samples"]
@@ -44,6 +46,10 @@ def test_save_load_regenerates_surface(tmp_path):
     assert metadata["seed"] == 0
     assert metadata["dt"] == 0.1
     assert metadata["nt"] == 24
+    assert metadata["binning"]["input_shape"] == [22, 23]
+    assert metadata["binning"]["output_shape"] == [11, 23]
+    assert metadata["binning"]["time"]["widths"] == [2] * 11
+    assert metadata["binning"]["selector"]["time"]["requested_width"] == 2
 
     # Regenerating the surface from the saved sites reproduces the fit exactly.
     surf = surface_from_idata(idata)

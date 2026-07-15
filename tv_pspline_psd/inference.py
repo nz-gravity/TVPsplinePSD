@@ -10,6 +10,7 @@ one real coefficient (``R = 1``); an STFT cell carries two (real and imaginary).
 from __future__ import annotations
 
 import time
+from typing import Any, Mapping
 
 import jax.numpy as jnp
 import numpy as np
@@ -25,7 +26,7 @@ from .model import (
     whiten_penalty_pair,
     whitened_init_values,
 )
-from .provenance import provenance
+from .provenance import binning_provenance, provenance
 from .splines import (
     create_bspline_basis,
     create_bspline_roughness_penalty,
@@ -203,6 +204,7 @@ def fit_log_pspline_surface(
     time_bin: int = 1,
     freq_bin: int = 1,
     freq_bin_starts: np.ndarray | None = None,
+    binning_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     """Fit a smooth ``log S(t, f)`` surface to real time-frequency coefficients.
 
@@ -239,6 +241,10 @@ def fit_log_pspline_surface(
         freq_bin_starts: Optional zero-based starts for variable-width frequency
             bins, typically from :func:`adaptive_frequency_bin_starts`. When
             supplied, ``freq_bin`` must remain 1.
+        binning_metadata: Optional JSON-serializable description of how a
+            variable partition was selected (for example the pilot smoother,
+            tolerance, and maximum width). The realised starts and widths are
+            always recorded automatically in provenance.
 
     Returns:
         A results dict with the posterior PSD surface and summaries, including
@@ -371,12 +377,24 @@ def fit_log_pspline_surface(
         source_data={"shape": list(coeffs.shape)},
     )
     fit_provenance["knot_allocation"] = spline["knot_allocation"]
+    # Retain the original summary keys for readers of older artifacts while the
+    # nested recipe below records the complete realised partition.
     fit_provenance.update({
         "time_bin": int(time_bin),
         "freq_bin": int(freq_bin),
         "adaptive_frequency_bins": freq_bin_starts is not None,
         "likelihood_grid_shape": [int(v) for v in power_fit.shape],
     })
+    fit_provenance["binning"] = binning_provenance(
+        n_time=time_grid.size,
+        n_freq=freq_grid.size,
+        time_bin=time_bin,
+        freq_bin=freq_bin,
+        freq_bin_starts=(
+            validated_freq_starts if freq_bin_starts is not None else None
+        ),
+        selector_metadata=binning_metadata,
+    )
     return {
         "mcmc": mcmc,
         "config": config,

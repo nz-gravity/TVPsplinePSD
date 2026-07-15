@@ -13,6 +13,8 @@ Strategies:
   pilot_freq    2-D pilot curvature allocation in frequency only
   explicit_freq same pilot frequency knots, with roughness kept in physical f
   adaptive_2d   time/frequency curvature densities from a 2-D pilot MAP fit
+  module_freq   production Whittle-MAP frequency-curvature allocator
+  chi2_freq     FastSpec-inspired running-median linear-window allocator
 
 Run a quick smoke test or the intended benchmark with, respectively,
 
@@ -35,6 +37,10 @@ from scipy.optimize import minimize
 from scipy.stats import kurtosis
 
 from tv_pspline_psd import PSplineConfig, wdm_analysis_coefficients
+from tv_pspline_psd.adaptive_knots import (
+    fit_adaptive_knots,
+    fit_running_median_chi2_knots,
+)
 from tv_pspline_psd.model import power_floor
 from tv_pspline_psd.splines import (
     create_adaptive_time_knots,
@@ -288,8 +294,20 @@ def plot_summary(
     pilot = strategies.get("pilot_freq") or strategies.get("adaptive_2d")
     if pilot and pilot.get("freq_knots"):
         rugs.append(("2-D pilot", np.asarray(pilot["freq_knots"]), "tab:blue"))
+    if "module_freq" in strategies:
+        rugs.append((
+            "production curvature",
+            np.asarray(strategies["module_freq"]["freq_knots"]),
+            "tab:green",
+        ))
+    if "chi2_freq" in strategies:
+        rugs.append((
+            r"running-median $\chi^2$",
+            np.asarray(strategies["chi2_freq"]["freq_knots"]),
+            "tab:purple",
+        ))
     ymin, ymax = ax.get_ylim()
-    levels = np.geomspace(ymax / 1.8, ymax / 7.0, len(rugs))
+    levels = ymax / (2.0 * 2.2 ** np.arange(len(rugs)))
     for level, (label, knots, color) in zip(levels, rugs):
         ax.vlines(knots, level / 1.12, level * 1.12, color=color, lw=0.55)
         ax.text(freq[0] * 1.18, level, label, color=color, fontsize=7,
@@ -299,12 +317,25 @@ def plot_summary(
     shown = [
         name for name in (
             "uniform", "current", "hand_warp", "pilot_time", "explicit_freq",
-            "pilot_freq", "adaptive_2d",
+            "pilot_freq", "adaptive_2d", "module_freq", "chi2_freq",
         ) if name in strategies
     ]
     values = [strategies[name]["heldout"]["null_excess_whittle_deviance"] for name in shown]
-    colors = ["tab:blue" if "freq" in name or name == "adaptive_2d" else "0.55" for name in shown]
+    strategy_colors = {
+        "uniform": "0.60",
+        "current": "0.60",
+        "module_freq": "tab:green",
+        "chi2_freq": "tab:purple",
+    }
+    colors = [
+        strategy_colors.get(
+            name, "tab:blue" if "freq" in name or name == "adaptive_2d" else "0.55"
+        )
+        for name in shown
+    ]
     axes[1].bar(np.arange(len(shown)), values, color=colors)
+    for i, value in enumerate(values):
+        axes[1].text(i, value, f"{value:.3f}", ha="center", va="bottom", fontsize=7)
     axes[1].set_xticks(np.arange(len(shown)), shown, rotation=25, ha="right")
     axes[1].set_ylabel("held-out null-region deviance")
     axes[1].set_ylim(0, max(values) * 1.15)
@@ -325,19 +356,40 @@ def main() -> None:
     p.add_argument("--lambda-time", type=float, default=2.0)
     p.add_argument("--lambda-freq", type=float, default=2.0)
     p.add_argument(
+        "--fmax", type=float, default=None,
+        help="optional upper frequency bound; e.g. 0.1 matches the Mojito study",
+    )
+    p.add_argument(
+        "--chi2-window-hz", type=float, default=5e-4,
+        help="running-median width for the FastSpec-inspired allocator",
+    )
+    p.add_argument("--chi2-min-window-bins", type=int, default=4)
+    p.add_argument(
+        "--holdout-offset", type=int, default=4, choices=range(10),
+        help="first of two consecutive held-out rows in each block of ten",
+    )
+    p.add_argument(
         "--strategies", nargs="+",
         default=[
             "uniform", "current", "hand_warp", "pilot_time", "pilot_freq",
-            "explicit_freq", "adaptive_2d",
+            "explicit_freq", "adaptive_2d", "module_freq", "chi2_freq",
         ],
     )
     p.add_argument("--output", type=Path, default=RESULTS / "summary.json")
     args = p.parse_args()
 
     coeffs, time_grid, freq_grid = load_coefficients(RESULTS / "wdm_coeffs.npz")
+    if args.fmax is not None:
+        keep = freq_grid <= args.fmax
+        if np.count_nonzero(keep) < args.freq_knots + 8:
+            raise ValueError("--fmax leaves too few channels for the requested knot count")
+        coeffs = coeffs[:, keep]
+        freq_grid = freq_grid[keep]
     power = coeffs**2
     index = np.arange(time_grid.size)
-    holdout = ((index % 10) == 4) | ((index % 10) == 5)
+    holdout = ((index % 10) == args.holdout_offset) | (
+        (index % 10) == ((args.holdout_offset + 1) % 10)
+    )
     holdout[[0, -1]] = False
     train = ~holdout
     t_uniform = normalize_coordinate(time_grid)
@@ -352,6 +404,56 @@ def main() -> None:
         "hand_warp": (current_t, hand_frequency_coordinate(freq_grid), {"time_knots": current_knots.tolist()}),
     }
     explicit: dict[str, tuple[np.ndarray | None, np.ndarray | None]] = {}
+    if "module_freq" in args.strategies:
+        allocation = fit_adaptive_knots(
+            power[train],
+            time_grid[train],
+            freq_grid,
+            n_pilot_knots_time=args.time_knots,
+            n_pilot_knots_freq=max(16, args.freq_knots),
+            n_knots_time=args.time_knots,
+            n_knots_freq=args.freq_knots,
+            method="curvature",
+        )
+        freq_uniform = normalize_coordinate(freq_grid)
+        module_freq = np.interp(allocation.freq_knots, freq_grid, freq_uniform)
+        coords["module_freq"] = (
+            t_uniform,
+            freq_uniform,
+            {
+                "freq_knots": allocation.freq_knots.tolist(),
+                "pilot": {
+                    "success": allocation.pilot.success,
+                    "objective": allocation.pilot.penalized_objective,
+                    "nit": allocation.pilot.n_iterations,
+                },
+            },
+        )
+        explicit["module_freq"] = (None, module_freq)
+    if "chi2_freq" in args.strategies:
+        allocation = fit_running_median_chi2_knots(
+            power[train],
+            freq_grid,
+            args.freq_knots,
+            median_window_hz=args.chi2_window_hz,
+            min_window_bins=args.chi2_min_window_bins,
+        )
+        freq_uniform = normalize_coordinate(freq_grid)
+        chi2_freq = np.interp(allocation.knots, freq_grid, freq_uniform)
+        coords["chi2_freq"] = (
+            t_uniform,
+            freq_uniform,
+            {
+                "freq_knots": allocation.knots.tolist(),
+                "chi2": {
+                    "threshold": allocation.threshold,
+                    "residual_scale": allocation.residual_scale,
+                    "window_bins": allocation.window_bins,
+                    "window_hz": allocation.window_bins * float(np.median(np.diff(freq_grid))),
+                },
+            },
+        )
+        explicit["chi2_freq"] = (None, chi2_freq)
     pilot_strategies = {"pilot_time", "pilot_freq", "explicit_freq", "adaptive_2d"}
     if pilot_strategies.intersection(args.strategies):
         ta, fa, meta = adaptive_coordinates(
@@ -381,7 +483,10 @@ def main() -> None:
         "dataset": str(DATA), "channel": "A2", "dt_raw_s": DT_RAW,
         "decimate": DECIMATE, "dt_s": DT_RAW * DECIMATE, "nt": NT,
         "grid_shape": list(coeffs.shape), "frequency_band_hz": [float(freq_grid[0]), float(freq_grid[-1])],
-        "note": "Full effective 0.133-Hz band retained, including the 0.12-Hz null.",
+        "note": (
+            "Frequency band optionally restricted by --fmax; blocked time rows are "
+            "held out from both allocation and fitting."
+        ),
         "holdout_rows": np.flatnonzero(holdout).tolist(), "arguments": vars(args) | {"output": str(args.output)},
         "strategies": {},
     }

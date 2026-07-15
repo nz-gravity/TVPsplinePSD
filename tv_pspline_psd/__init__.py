@@ -18,8 +18,10 @@ _jax.config.update("jax_enable_x64", True)
 # Submodule imports must follow the x64 config above (E402 is expected here).
 from .adaptive_knots import (  # noqa: E402
     AdaptiveKnotResult,
+    ChiSquareKnotResult,
     WhittleMapResult,
     fit_adaptive_knots,
+    fit_running_median_chi2_knots,
     fit_whittle_map,
 )
 from .config import PSplineConfig  # noqa: E402
@@ -65,8 +67,10 @@ from .stft import moving_stft, run_stft_mcmc, stft_white_noise_calibration  # no
 __all__ = [
     "PSplineConfig",
     "AdaptiveKnotResult",
+    "ChiSquareKnotResult",
     "WhittleMapResult",
     "fit_adaptive_knots",
+    "fit_running_median_chi2_knots",
     "fit_whittle_map",
     "fit_log_pspline_surface",
     "adaptive_frequency_bin_starts",
