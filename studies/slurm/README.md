@@ -14,27 +14,28 @@ This is sufficient to decide whether the common 8-knot configuration and the
 endpoint 6/10-knot sensitivity are materially different. Use the larger sweep
 below only if that pilot indicates that the paper result needs tighter bands.
 
-### Full sweep
+### Final production sweep
 
 From the repository root:
 
 ```bash
-job_id=$(sbatch --parsable studies/slurm/ls2_sim_study.sh)
-sbatch --dependency=afterok:${job_id} studies/slurm/ls2_render.sh
+job_id=$(sbatch --parsable studies/slurm/ls2_fig3_production.sh)
+sbatch --dependency=afterok:${job_id} studies/slurm/ls2_fig3_render.sh
 ```
 
-The array covers seven durations (`n = 576, ..., 36864`) and common interior
-frequency-knot counts 6, 8, and 10. Both WDM and moving-periodogram fits use
-the same count and physical knot locations. Production defaults are 100 data
-realisations and 1000 Monte Carlo draws for each finite-resolution reference.
-Override them at submission time when needed:
+The array covers exactly `n = 2^10, ..., 2^15`, holding the WDM frequency axis
+at 32 channels and varying its time axis from 32 to 1024 bins.  Six common
+interior frequency knots were selected by the pilot; both likelihoods use the
+same physical locations.  Production defaults are 100 data realisations and
+200 Monte Carlo draws for the representation-specific diagnostic.  The common
+latent-PSD MSE is the paper metric. Override the repeat count when needed:
 
 ```bash
-REPEATS=20 REFERENCE_DRAWS=200 sbatch studies/slurm/ls2_sim_study.sh
+REPEATS=20 sbatch studies/slurm/ls2_fig3_production.sh
 ```
 
-The primary paper figure uses 8 frequency knots. The render job also writes
-`sim_knot_sensitivity.png` from every available 6/8/10-knot shard.
+The primary paper figure uses six matched frequency knots. Existing pilot
+shards remain separate because their `n` grid differs from this production run.
 
 ## Figure 7 oscillation diagnostics
 

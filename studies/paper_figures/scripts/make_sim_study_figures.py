@@ -57,12 +57,15 @@ set_paper_style()
 FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
 
 DT = 0.1
+# Number of WDM frequency channels.  The production power-of-two sweep sets
+# this to 32 so every total series length can itself be a power of two.
 NF = 24
 NT_VALUES = (24, 48, 96, 192, 384, 768, 1536)
 TANG_M, TANG_THIN = 16, 2
 # Fixed interior evaluation domain shared by every duration and both front
-# ends. In particular, 0.95 lies outside the trimmed WDM support when nt=24.
-U_COMMON = np.linspace(0.05, 0.90, 60)
+# ends.  [0.10, 0.85] remains inside the trimmed WDM support of the smallest
+# production grid (nt=16, N=512, nf=32).
+U_COMMON = np.linspace(0.10, 0.85, 60)
 F_COMMON = np.linspace(0.6, 4.4, 60)
 DEFAULT_FREQ_KNOTS = 8
 KNOT_SENSITIVITY = (6, 8, 10)
@@ -210,14 +213,16 @@ def _diag_extrema(res) -> tuple[float, float]:
 
 
 def _shard_path(n_total: int, freq_knots: int) -> Path:
-    return FIG_DIR / f"sim_metrics_kf{freq_knots:02d}_nt{n_total:05d}.npz"
+    prefix = "sim_metrics" if NF == 24 else f"sim_metrics_nf{NF:02d}"
+    return FIG_DIR / f"{prefix}_kf{freq_knots:02d}_nt{n_total:05d}.npz"
 
 
 def _load_shards(freq_knots: int) -> tuple[np.ndarray, dict[str, list]]:
-    shards = sorted(FIG_DIR.glob(f"sim_metrics_kf{freq_knots:02d}_nt*.npz"))
+    prefix = "sim_metrics" if NF == 24 else f"sim_metrics_nf{NF:02d}"
+    shards = sorted(FIG_DIR.glob(f"{prefix}_kf{freq_knots:02d}_nt*.npz"))
     if not shards:
         raise FileNotFoundError(
-            f"no matched-knot shards for {freq_knots} frequency knots in {FIG_DIR}"
+            f"no matched-knot nf={NF} shards for {freq_knots} frequency knots in {FIG_DIR}"
         )
     durations, raw = [], {k: [] for k in METRIC_KEYS}
     for path in shards:
@@ -398,10 +403,13 @@ def _finite_resolution_references(nt, config, n_draws):
 
 
 def main() -> None:
+    global NF
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeats", type=int, default=100)
     parser.add_argument("--freq-knots", type=int, default=DEFAULT_FREQ_KNOTS,
                         help="Common interior frequency-knot count for both front ends.")
+    parser.add_argument("--nf", type=int, default=NF,
+                        help="Number of WDM frequency channels (must be even).")
     parser.add_argument("--reference-draws", type=int, default=1000,
                         help="Monte Carlo draws for each finite-resolution target.")
     parser.add_argument("--nt", type=int, nargs="*", default=list(NT_VALUES),
@@ -419,8 +427,11 @@ def main() -> None:
     args = parser.parse_args()
     if args.freq_knots < 1:
         parser.error("--freq-knots must be positive")
+    if args.nf < 2 or args.nf % 2:
+        parser.error("--nf must be an even integer of at least 2")
     if args.reference_draws < 1:
         parser.error("--reference-draws must be positive")
+    NF = args.nf
     FIG_DIR.mkdir(parents=True, exist_ok=True)
 
     if args.from_csv is not None:
@@ -506,7 +517,7 @@ def main() -> None:
             rep["wt"].append(rw["nuts_runtime_s"]); rep["tt"].append(rt["nuts_runtime_s"])
             rep["wr"].append(rhat_w); rep["tr"].append(rhat_t)
             rep["we"].append(neff_w); rep["te"].append(neff_t)
-        np.savez(_shard_path(n_total, args.freq_knots), n_total=n_total,
+        np.savez(_shard_path(n_total, args.freq_knots), n_total=n_total, nf=NF,
                  freq_knots=args.freq_knots, repeats=args.repeats,
                  **{f"{k}_samples": np.asarray(rep[k]) for k in METRIC_KEYS})
         print(f"n={n_total:6d}  WDM mse={np.median(rep['wm']):.3f} "
