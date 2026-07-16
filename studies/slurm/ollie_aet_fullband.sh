@@ -2,9 +2,9 @@
 #SBATCH --job-name=ollie_aet
 #SBATCH --array=0-2
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=16G
-#SBATCH --time=48:00:00
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=4G
+#SBATCH --time=02:00:00
 #SBATCH --output=logs/ollie_aet_%A_%a.out
 
 # LISA-band (1e-4..0.1 Hz) TV-PSD fit of the AET channels built from Ollie's
@@ -27,4 +27,4 @@ export JAX_PLATFORMS=cpu
 # shellcheck disable=SC2086  # word-splitting of the per-task args is intended
 python studies/ollie_tdi/fit_aet_fullband.py \
     --data full ${TASK_ARGS[$SLURM_ARRAY_TASK_ID]} \
-    --n-warmup 500 --n-samples 500 --num-chains 4
+    --n-warmup 500 --n-samples 500 --num-chains 2

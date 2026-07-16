@@ -153,6 +153,58 @@ def adaptive_frequency_bin_starts(
     return np.asarray(starts, dtype=int)
 
 
+def gap_aware_time_bin_starts(
+    time_grid: np.ndarray,
+    time_bin: int,
+    *,
+    max_gap: float | None = None,
+    gap_factor: float = 1.5,
+) -> np.ndarray:
+    """Return uniform-width time-bin starts without crossing missing intervals.
+
+    Consecutive retained rows are not necessarily consecutive in physical time:
+    after rows affected by a data gap are removed, blindly grouping array rows
+    can join cells on opposite sides of that gap.  This helper splits the grid
+    into contiguous runs first, then partitions each run independently.  Ragged
+    bins are therefore allowed immediately before every gap and at the end.
+
+    If ``max_gap`` is omitted, a break is any step larger than
+    ``gap_factor * median(diff(time_grid))``.  Supplying ``max_gap`` is useful
+    when the nominal cadence is known exactly.
+    """
+    time_grid = np.asarray(time_grid, dtype=float)
+    if time_grid.ndim != 1 or time_grid.size == 0:
+        raise ValueError("time_grid must be a non-empty one-dimensional array.")
+    if not np.isfinite(time_grid).all() or np.any(np.diff(time_grid) <= 0):
+        raise ValueError("time_grid must be finite and strictly increasing.")
+    if (
+        not isinstance(time_bin, (int, np.integer))
+        or isinstance(time_bin, bool)
+        or time_bin < 1
+    ):
+        raise ValueError("time_bin must be a positive integer.")
+    if time_grid.size == 1:
+        return np.array([0], dtype=int)
+
+    steps = np.diff(time_grid)
+    if max_gap is None:
+        if not np.isfinite(gap_factor) or gap_factor <= 1.0:
+            raise ValueError("gap_factor must be finite and larger than 1.")
+        max_gap = float(gap_factor * np.median(steps))
+    elif not np.isfinite(max_gap) or max_gap <= 0:
+        raise ValueError("max_gap must be finite and positive.")
+
+    breaks = np.flatnonzero(steps > max_gap) + 1
+    run_starts = np.r_[0, breaks]
+    run_stops = np.r_[breaks, time_grid.size]
+    starts = [
+        start
+        for run_start, run_stop in zip(run_starts, run_stops)
+        for start in range(int(run_start), int(run_stop), int(time_bin))
+    ]
+    return np.asarray(starts, dtype=int)
+
+
 def bin_power_time_axis(
     power: np.ndarray,
     time_grid: np.ndarray,
@@ -203,6 +255,7 @@ def fit_log_pspline_surface(
     progress_bar: bool = True,
     time_bin: int = 1,
     freq_bin: int = 1,
+    time_bin_starts: np.ndarray | None = None,
     freq_bin_starts: np.ndarray | None = None,
     binning_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
@@ -238,6 +291,10 @@ def fit_log_pspline_surface(
             ``~time_bin``. Default 1 (no binning).
         freq_bin: Number of consecutive frequency channels per likelihood bin.
             Uses the same summed-power/count construction as ``time_bin``.
+        time_bin_starts: Optional zero-based starts for a variable-width time
+            partition.  This is intended for gap-aware pooling; use
+            :func:`gap_aware_time_bin_starts` after removing affected WDM rows.
+            When supplied, ``time_bin`` must remain 1.
         freq_bin_starts: Optional zero-based starts for variable-width frequency
             bins, typically from :func:`adaptive_frequency_bin_starts`. When
             supplied, ``freq_bin`` must remain 1.
@@ -270,7 +327,9 @@ def fit_log_pspline_surface(
         raise ValueError("time_grid and freq_grid must contain only finite values.")
     if np.any(np.diff(time_grid) <= 0) or np.any(np.diff(freq_grid) <= 0):
         raise ValueError("time_grid and freq_grid must be strictly increasing.")
-    _validate_bin_starts(None, time_grid.size, time_bin, axis="time")
+    validated_time_starts = _validate_bin_starts(
+        time_bin_starts, time_grid.size, time_bin, axis="time"
+    )
     validated_freq_starts = _validate_bin_starts(
         freq_bin_starts, freq_grid.size, freq_bin, axis="freq"
     )
@@ -299,7 +358,12 @@ def fit_log_pspline_surface(
     basis_eig_freq = B_freq @ whitened["U_freq"]
 
     n_components = coeffs.shape[0]
-    coarse_grained = time_bin > 1 or freq_bin > 1 or freq_bin_starts is not None
+    coarse_grained = (
+        time_bin > 1
+        or freq_bin > 1
+        or time_bin_starts is not None
+        or freq_bin_starts is not None
+    )
     if coarse_grained:
         power_fit, time_grid_fit, freq_grid_fit, counts_fit = bin_power_rectangular(
             power,
@@ -308,6 +372,9 @@ def fit_log_pspline_surface(
             n_components,
             time_bin=time_bin,
             freq_bin=freq_bin,
+            time_bin_starts=(
+                validated_time_starts if time_bin_starts is not None else None
+            ),
             freq_bin_starts=validated_freq_starts if freq_bin_starts is not None else None,
         )
         B_time_fit = evaluate_bspline_basis(
@@ -390,6 +457,9 @@ def fit_log_pspline_surface(
         n_freq=freq_grid.size,
         time_bin=time_bin,
         freq_bin=freq_bin,
+        time_bin_starts=(
+            validated_time_starts if time_bin_starts is not None else None
+        ),
         freq_bin_starts=(
             validated_freq_starts if freq_bin_starts is not None else None
         ),

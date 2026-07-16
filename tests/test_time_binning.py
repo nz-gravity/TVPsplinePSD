@@ -11,6 +11,7 @@ from tv_pspline_psd.inference import (
     adaptive_frequency_bin_starts,
     bin_power_rectangular,
     bin_power_time_axis,
+    gap_aware_time_bin_starts,
 )
 from tv_pspline_psd.model import power_whittle_log_likelihood
 
@@ -107,6 +108,41 @@ def test_adaptive_frequency_bins_refine_a_sharp_feature() -> None:
     assert widths.max() == 16
     assert widths[abs(centers - 0.5) < 0.08].min() <= 2
     assert widths[abs(centers - 0.5) > 0.2].max() == 16
+
+
+def test_gap_aware_time_bins_never_pool_across_a_missing_interval() -> None:
+    time_grid = np.array([0.0, 1.0, 2.0, 3.0, 8.0, 9.0, 10.0])
+    starts = gap_aware_time_bin_starts(time_grid, 2)
+
+    np.testing.assert_array_equal(starts, [0, 2, 4, 6])
+    power, pooled_time, _, counts = bin_power_rectangular(
+        np.ones((time_grid.size, 3)),
+        time_grid,
+        np.arange(3, dtype=float),
+        1,
+        time_bin_starts=starts,
+    )
+    np.testing.assert_allclose(pooled_time, [0.5, 2.5, 8.5, 10.0])
+    np.testing.assert_array_equal(counts[:, 0], [2, 2, 2, 1])
+    np.testing.assert_array_equal(power[:, 0], [2.0, 2.0, 2.0, 1.0])
+
+
+def test_gap_aware_time_partition_is_saved_completely_in_provenance() -> None:
+    time_grid = np.array([0.0, 1.0, 2.0, 7.0, 8.0])
+    starts = gap_aware_time_bin_starts(time_grid, 2)
+    from tv_pspline_psd.provenance import binning_provenance
+
+    recipe = binning_provenance(
+        n_time=time_grid.size,
+        n_freq=4,
+        time_bin_starts=starts,
+        selector_metadata={"time": {"method": "gap_aware_uniform", "nominal_width": 2}},
+    )
+
+    assert recipe["time"]["mode"] == "variable"
+    assert recipe["time"]["starts"] == [0, 2, 3]
+    assert recipe["time"]["widths"] == [2, 1, 2]
+    assert recipe["selector"]["time"]["nominal_width"] == 2
 
 
 def _toy_surface(nt: int, nf: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

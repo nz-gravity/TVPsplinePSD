@@ -30,6 +30,7 @@ from .inference import (  # noqa: E402
     adaptive_frequency_bin_starts,
     evaluate_dense_posterior_mean,
     fit_log_pspline_surface,
+    gap_aware_time_bin_starts,
     run_wdm_psd_mcmc,
     wdm_analysis_coefficients,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "fit_whittle_map",
     "fit_log_pspline_surface",
     "adaptive_frequency_bin_starts",
+    "gap_aware_time_bin_starts",
     "wdm_analysis_coefficients",
     "run_wdm_psd_mcmc",
     "run_gibbs_signal_noise_mcmc",

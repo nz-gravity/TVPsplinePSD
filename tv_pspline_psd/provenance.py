@@ -40,6 +40,7 @@ def binning_provenance(
     n_freq: int,
     time_bin: int = 1,
     freq_bin: int = 1,
+    time_bin_starts: np.ndarray | None = None,
     freq_bin_starts: np.ndarray | None = None,
     selector_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -51,7 +52,12 @@ def binning_provenance(
     ``selector_metadata`` can additionally retain the pilot algorithm and its
     settings.
     """
-    time_starts = np.arange(0, int(n_time), int(time_bin), dtype=int)
+    if time_bin_starts is None:
+        time_mode = "identity" if time_bin == 1 else "uniform"
+        time_starts = np.arange(0, int(n_time), int(time_bin), dtype=int)
+    else:
+        time_mode = "variable"
+        time_starts = np.asarray(time_bin_starts, dtype=int)
     if freq_bin_starts is None:
         frequency_mode = "identity" if freq_bin == 1 else "uniform"
         frequency_starts = np.arange(0, int(n_freq), int(freq_bin), dtype=int)
@@ -66,7 +72,7 @@ def binning_provenance(
         "input_shape": [int(n_time), int(n_freq)],
         "output_shape": [int(time_starts.size), int(frequency_starts.size)],
         "time": {
-            "mode": "identity" if time_bin == 1 else "uniform",
+            "mode": time_mode,
             "bin_size": int(time_bin),
             "starts": time_starts.tolist(),
             "widths": time_widths.tolist(),
