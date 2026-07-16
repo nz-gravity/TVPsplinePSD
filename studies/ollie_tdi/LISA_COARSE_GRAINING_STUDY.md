@@ -1,7 +1,10 @@
 # LISA coarse-graining study
 
-This is a paired accuracy/speed study on the cached 30-day A-channel WDM
-coefficients. It runs the same spline model with five likelihood grids:
+This is a paired accuracy/speed study on the 30-day A-channel WDM
+coefficients. If the optional WDM cache is absent, the script creates it from
+`datasets/ollie_data/simulated_noise_30_days_L1_ext.h5` (using `tdis/A2`, or
+constructing A from X2 and Z2 as a fallback) and reuses it on later submissions.
+It runs the same spline model with five likelihood grids:
 
 1. exact fine grid;
 2. uniform frequency pooling (`F=12`);

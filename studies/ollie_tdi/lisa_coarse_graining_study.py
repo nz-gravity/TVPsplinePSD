@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch, Rectangle
+import h5py
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
@@ -32,6 +33,7 @@ from tv_pspline_psd import (
     gap_aware_time_bin_starts,
     set_paper_style,
     summarize_mcmc_diagnostics,
+    wdm_analysis_coefficients,
 )
 from tv_pspline_psd.inference import (
     adaptive_frequency_bin_starts,
@@ -39,7 +41,7 @@ from tv_pspline_psd.inference import (
 )
 from tv_pspline_psd.model import power_floor
 
-from fit_aet_fullband import lisa_like_gaps
+from fit_aet_fullband import DATA_FULL, DECIMATE, fft_decimate, lisa_like_gaps
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -48,6 +50,51 @@ DEFAULT_OUTPUT = REPO / "studies/results/ollie_tdi/coarse_graining_lisa"
 PAPER_FIGURE = REPO / "overleaf/figures/coarse_graining_cells.png"
 OBSERVATION_DAYS = 30.0
 NULLS = np.arange(0.03, 0.101, 0.03)
+
+
+def _load_or_build_coefficients(
+    cache: Path, data_path: Path
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load the optional shortcut cache, or create it from the shipped HDF5."""
+    if cache.exists():
+        print(f"[data] loading WDM cache {cache}", flush=True)
+        with np.load(cache) as cached:
+            return (
+                np.asarray(cached["coeffs"], dtype=float),
+                np.asarray(cached["time_grid"], dtype=float),
+                np.asarray(cached["freq_grid"], dtype=float),
+            )
+
+    if not data_path.exists():
+        raise FileNotFoundError(
+            f"Neither the optional WDM cache ({cache}) nor the source HDF5 "
+            f"({data_path}) exists."
+        )
+    print(f"[data] cache absent; building it from {data_path}", flush=True)
+    with h5py.File(data_path) as h5:
+        if "tdis/A2" in h5:
+            raw_a = np.asarray(h5["tdis/A2"][:], dtype=float)
+        else:
+            raw_a = (
+                np.asarray(h5["tdis/Z2"][:], dtype=float)
+                - np.asarray(h5["tdis/X2"][:], dtype=float)
+            ) / np.sqrt(2.0)
+    data = fft_decimate(raw_a, DECIMATE)
+    transform_config = PSplineConfig(
+        trim_time_bins=4,
+        trim_low_freq_channels=4,
+        trim_high_freq_channels=1,
+        freq_knot_strategy="linear",
+    )
+    coeffs, time_grid, freq_grid = wdm_analysis_coefficients(
+        data, 0.25 * DECIMATE, 128, transform_config
+    )
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        cache, coeffs=coeffs, time_grid=time_grid, freq_grid=freq_grid
+    )
+    print(f"[data] saved reusable WDM cache {cache}", flush=True)
+    return coeffs, time_grid, freq_grid
 
 
 def _gap_mask(time_grid: np.ndarray, seed: int) -> tuple[np.ndarray, list[list[float]]]:
@@ -365,6 +412,7 @@ def _plot_pooling_cells(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    parser.add_argument("--data", type=Path, default=DATA_FULL)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--paper-figure", type=Path, default=PAPER_FIGURE)
     parser.add_argument("--warmup", type=int, default=300)
@@ -378,10 +426,9 @@ def main() -> None:
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
-    with np.load(args.cache) as cached:
-        coeffs_all = np.asarray(cached["coeffs"], dtype=float)
-        time_grid_all = np.asarray(cached["time_grid"], dtype=float)
-        freq_grid_all = np.asarray(cached["freq_grid"], dtype=float)
+    coeffs_all, time_grid_all, freq_grid_all = _load_or_build_coefficients(
+        args.cache, args.data
+    )
     band = (freq_grid_all >= 1e-4) & (freq_grid_all <= 0.1)
     coeffs_all = coeffs_all[:, band]
     freq_grid = freq_grid_all[band]
@@ -404,6 +451,7 @@ def main() -> None:
     )
     report: dict[str, Any] = {
         "source_cache": str(args.cache),
+        "source_hdf5": str(args.data),
         "observation_days": OBSERVATION_DAYS,
         "configuration": {
             "warmup": args.warmup,
