@@ -33,6 +33,7 @@ from .inference import (  # noqa: E402
     gap_aware_time_bin_starts,
     run_wdm_psd_mcmc,
     wdm_analysis_coefficients,
+    wdm_analysis_coefficients_from_fd,
 )
 from .io import (  # noqa: E402
     load_run,
@@ -56,8 +57,8 @@ from .moving_periodogram import (  # noqa: E402
 )
 from .plotting import (  # noqa: E402
     plot_channel_slice,
-    plot_surface_knots,
     plot_surface_comparison,
+    plot_surface_knots,
     quicklook,
     save_figure,
     set_paper_style,
@@ -78,6 +79,7 @@ __all__ = [
     "adaptive_frequency_bin_starts",
     "gap_aware_time_bin_starts",
     "wdm_analysis_coefficients",
+    "wdm_analysis_coefficients_from_fd",
     "run_wdm_psd_mcmc",
     "run_gibbs_signal_noise_mcmc",
     "run_multichannel_joint_mcmc",

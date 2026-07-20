@@ -46,6 +46,8 @@ ignore = ["E501"]  # Existing scientific scripts intentionally use long formulas
 "studies/ollie_tdi/aet_corr_summary.py" = ["E702"]
 "studies/ollie_tdi/mojito_experiments.py" = ["E702"]
 "studies/ollie_tdi/mojito_validation.py" = ["E702"]
+# This script must select the Agg backend before importing its plotting helper.
+"studies/ollie_tdi/lisa_coarse_graining_study.py" = ["I001"]
 
 [build-system]
 requires = ["hatchling"]

@@ -44,6 +44,11 @@ wheels/
 
 # Study and notebook scratch outputs
 tmp/
+# Generated sampler outputs, figures, and campaign summaries stay outside Git.
+studies/results/
+studies/results/ollie_tdi/coarse_graining_lisa/ozstar_export_*.tar.gz
+# Retired VI warm-start experiment; the implementation and benchmark are removed.
+studies/results/ollie_tdi/vi_benchmark/
 
 
 out_tests/

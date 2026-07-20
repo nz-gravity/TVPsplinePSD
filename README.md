@@ -90,8 +90,16 @@ uv run python examples/quickstart.py
 | `tv_pspline_psd/` | Estimator package: splines, priors, inference, diagnostics, metrics, plotting |
 | `tv_pspline_psd/datasets/` | Synthetic datasets and references |
 | `examples/` | Minimal runnable examples |
-| `studies/` | Reproducible simulation studies for LS2 and LISA use cases |
-| `notes/` | Manuscript source, bibliography, figure scripts, and generated figures |
+| `studies/` | Reproducible LS2 and LISA study workflows; see [`studies/README.md`](studies/README.md) |
+| `notes/` | Design and validation notes |
+
+## Generated artifacts
+
+The repository contains the code, Slurm launchers, and compact paper inputs
+needed to reproduce the studies.  Datasets and generated sampler outputs,
+plots, logs, and campaign summaries belong outside Git under
+`studies/results/`.  The one exception is a deliberately retained small table
+under `studies/paper_figures/figures/` when the renderer consumes it directly.
 
 Data generation is intentionally separate from estimation: dataset modules
 return raw time series and analytic or Monte Carlo references without depending

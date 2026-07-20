@@ -1,7 +1,8 @@
-# CLAUDE.md
+# Shared project guidance
 
-Guidance for Claude (and humans) working in this repo. See `README.md` for the
-scientific overview; this file captures working conventions, the active
+Guidance for Claude, Codex, and humans working in this repo. `AGENTS.md`
+points here so both assistants use the same conventions. See `README.md` for
+the scientific overview; this file captures working conventions, the active
 Mojito non-stationarity study, and hard-won gotchas.
 
 ## What this is

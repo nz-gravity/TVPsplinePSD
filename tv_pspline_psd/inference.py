@@ -258,6 +258,7 @@ def fit_log_pspline_surface(
     time_bin_starts: np.ndarray | None = None,
     freq_bin_starts: np.ndarray | None = None,
     binning_metadata: Mapping[str, Any] | None = None,
+    initial_state: Any | None = None,
 ) -> dict[str, object]:
     """Fit a smooth ``log S(t, f)`` surface to real time-frequency coefficients.
 
@@ -302,6 +303,12 @@ def fit_log_pspline_surface(
             variable partition was selected (for example the pilot smoother,
             tolerance, and maximum width). The realised starts and widths are
             always recorded automatically in provenance.
+        initial_state: Optional ``last_state`` from a previous result on the
+            same model dimensions. When supplied, warmup is skipped and the
+            persistent NUTS chain (positions plus adapted step size and mass
+            matrix) is advanced for ``n_samples`` further transitions. This is
+            the noise-block contract for blocked signal/noise samplers: the
+            data (residual) may change between calls, the spline setup may not.
 
     Returns:
         A results dict with the posterior PSD surface and summaries, including
@@ -423,6 +430,21 @@ def fit_log_pspline_surface(
         kernel, num_warmup=n_warmup, num_samples=n_samples, num_chains=num_chains,
         chain_method="sequential", progress_bar=progress_bar,
     )
+    if initial_state is not None:
+        # Advancing a persistent chain: reuse the position and the adapted step
+        # size and mass matrix, and skip warmup entirely. The stored potential
+        # energy and gradient belong to the *previous* data (residual), so they
+        # must be recomputed under the new model args or every proposal is
+        # rejected through a stale energy difference.
+        from jax import value_and_grad
+        from numpyro.infer.util import potential_energy as _potential_energy
+
+        refreshed_pe, refreshed_grad = value_and_grad(
+            lambda z: _potential_energy(pspline_surface_model, model_args, {}, z)
+        )(initial_state.z)
+        mcmc.post_warmup_state = initial_state._replace(
+            potential_energy=refreshed_pe, z_grad=refreshed_grad
+        )
     nuts_t0 = time.perf_counter()
     mcmc.run(
         random.PRNGKey(random_seed), *model_args,
@@ -437,6 +459,9 @@ def fit_log_pspline_surface(
         eig_samples, basis_eig_time, basis_eig_freq,
         precomputed=samples.get("log_psd"),
     )
+    # The final retained draw is the exact conditional draw a blocked
+    # signal/noise sampler must pass to its signal block (never the mean).
+    log_last = basis_eig_time @ eig_samples[-1] @ basis_eig_freq.T
 
     fit_provenance = provenance(
         seed=random_seed,
@@ -492,6 +517,8 @@ def fit_log_pspline_surface(
         # Geometric posterior mean exp(E[log S]); ``psd_mean`` is a deprecated
         # compatibility alias retained for one release.
         "psd_geometric_mean": np.exp(log_mean),
+        "psd_last_draw": np.exp(log_last),
+        "last_state": mcmc.last_state,
         "psd_mean": np.exp(log_mean),
         "psd_lower": np.exp(log_lower),
         "psd_upper": np.exp(log_upper),
@@ -720,6 +747,13 @@ def wdm_analysis_coefficients(
         )
 
     wdm = TimeSeries(data, dt=dt).to_wdm(nt=nt)
+    return _trimmed_wdm_analysis_grid(wdm, config)
+
+
+def _trimmed_wdm_analysis_grid(
+    wdm, config: PSplineConfig
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Trim a WDM object to the analysis grid shared by every front end."""
     coeffs = _wdm_coeffs_2d(wdm)
     keep_time = np.arange(config.trim_time_bins, wdm.nt - config.trim_time_bins)
     keep_freq = np.arange(
@@ -730,6 +764,41 @@ def wdm_analysis_coefficients(
     time_grid = np.asarray(wdm.time_grid)[keep_time] / wdm.duration
     freq_grid = np.asarray(wdm.freq_grid)[keep_freq]
     return coeffs[np.ix_(keep_time, keep_freq)], time_grid, freq_grid
+
+
+def wdm_analysis_coefficients_from_fd(
+    fd_data: np.ndarray, dt: float, nt: int, config: PSplineConfig
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """WDM-transform a one-sided FD series directly, skipping the time domain.
+
+    ``fd_data`` holds ``n // 2 + 1`` complex samples on the full
+    ``rfftfreq(n, dt)`` grid in the continuous-FT convention
+    ``h(f) = dt * rfft(x)`` (the BBHx/lisatools convention). The result is
+    identical to ``wdm_analysis_coefficients(irfft(fd_data / dt), ...)``
+    without the inverse/forward FFT round trip, and uses the same trimming, so
+    FD templates and time-domain data land on one analysis grid.
+    """
+    from wdm_transform import FrequencySeries
+
+    fd_data = np.asarray(fd_data)
+    if fd_data.ndim != 1:
+        raise ValueError("FD input data must be one-dimensional.")
+    if fd_data.size < 2:
+        raise ValueError("FD input data must cover a non-trivial rfft grid.")
+    if not np.isfinite(fd_data).all():
+        raise ValueError("FD input data must contain only finite values.")
+    if dt <= 0:
+        raise ValueError("dt must be strictly positive.")
+    n_total = 2 * (fd_data.size - 1)
+    half = np.asarray(fd_data) / dt
+    # The DC and Nyquist bins of a real signal's spectrum are real.
+    full = np.empty(n_total, dtype=complex)
+    full[0] = half[0].real
+    full[n_total // 2] = half[-1].real
+    full[1 : n_total // 2] = half[1:-1]
+    full[n_total // 2 + 1 :] = np.conj(half[1:-1][::-1])
+    wdm = FrequencySeries(full, df=1.0 / (n_total * dt)).to_wdm(nt=nt)
+    return _trimmed_wdm_analysis_grid(wdm, config)
 
 
 def run_wdm_psd_mcmc(

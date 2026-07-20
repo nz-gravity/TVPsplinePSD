@@ -19,8 +19,6 @@ from pathlib import Path
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import kurtosis
-
 from fit_aet_fullband import (
     DATA_FULL,
     DECIMATE,
@@ -34,6 +32,8 @@ from fit_aet_fullband import (
     good_time_bins,
     load_aet,
 )
+from scipy.stats import kurtosis
+
 from tv_pspline_psd import PSplineConfig, set_paper_style, wdm_analysis_coefficients
 from tv_pspline_psd.datasets import wdm_white_noise_calibration
 

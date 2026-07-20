@@ -33,13 +33,6 @@ from .ls2 import simulate_ls2, true_psd_ls2
 __all__ = [
     "simulate_ls2",
     "true_psd_ls2",
-    "gb_signal",
-    "gb_quadratures",
-    "SOBHParams",
-    "sobh_strain_fd",
-    "sobh_strain_td",
-    "sobh_optimal_snr",
-    "lisa_lw_antenna",
     "gb_tdi_signal",
     "simulate_tv_lisa_tdi",
     "true_tv_lisa_tdi_psd",

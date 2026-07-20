@@ -28,9 +28,12 @@ back with ``--from-csv`` to re-render Figure 3 without refitting.
 from __future__ import annotations
 
 import argparse
+import gc
+import os
 import time
 from pathlib import Path
 
+import jax
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -69,6 +72,7 @@ U_COMMON = np.linspace(0.10, 0.85, 60)
 F_COMMON = np.linspace(0.6, 4.4, 60)
 DEFAULT_FREQ_KNOTS = 8
 KNOT_SENSITIVITY = (6, 8, 10)
+REFERENCE_CACHE_VERSION = 1
 
 
 def _time_knots(nt: int) -> int:
@@ -215,6 +219,109 @@ def _diag_extrema(res) -> tuple[float, float]:
 def _shard_path(n_total: int, freq_knots: int) -> Path:
     prefix = "sim_metrics" if NF == 24 else f"sim_metrics_nf{NF:02d}"
     return FIG_DIR / f"{prefix}_kf{freq_knots:02d}_nt{n_total:05d}.npz"
+
+
+def _chunk_path(
+    n_total: int, freq_knots: int, repeat_start: int, repeats: int
+) -> Path:
+    repeat_stop = repeat_start + repeats
+    prefix = "sim_metrics" if NF == 24 else f"sim_metrics_nf{NF:02d}"
+    return (
+        FIG_DIR / "chunks" /
+        f"{prefix}_kf{freq_knots:02d}_nt{n_total:05d}_"
+        f"r{repeat_start:03d}-{repeat_stop - 1:03d}.npz"
+    )
+
+
+def _atomic_savez(path: Path, **arrays) -> None:
+    """Atomically replace an NPZ checkpoint on the same filesystem."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            np.savez(handle, **arrays)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _reference_cache_path(
+    cache_dir: Path, nt: int, freq_knots: int, n_draws: int
+) -> Path:
+    return cache_dir / (
+        f"ls2_refs_v{REFERENCE_CACHE_VERSION}_nf{NF:02d}_nt{nt:04d}_"
+        f"kf{freq_knots:02d}_nd{n_draws:04d}.npz"
+    )
+
+
+def _reference_metadata(nt: int, freq_knots: int, n_draws: int) -> dict[str, object]:
+    return {
+        "cache_version": REFERENCE_CACHE_VERSION,
+        "dt": DT,
+        "nf": NF,
+        "nt": nt,
+        "n_total": nt * NF,
+        "freq_knots": freq_knots,
+        "time_knots": _time_knots(nt),
+        "tang_m": TANG_M,
+        "tang_thin": TANG_THIN,
+        "reference_draws": n_draws,
+    }
+
+
+def _read_reference_cache(
+    path: Path, nt: int, freq_knots: int, n_draws: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    expected = _reference_metadata(nt, freq_knots, n_draws)
+    with np.load(path) as saved:
+        for key, value in expected.items():
+            actual = saved[key].item()
+            if actual != value:
+                raise ValueError(
+                    f"Reference cache {path} has {key}={actual!r}; expected {value!r}."
+                )
+        return (
+            np.asarray(saved["cal_wdm"]),
+            np.asarray(saved["ref_wdm"]),
+            np.asarray(saved["ref_tang"]),
+        )
+
+
+def _load_or_create_references(
+    nt: int,
+    freq_knots: int,
+    n_draws: int,
+    cache_dir: Path,
+    *,
+    require_cache: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    path = _reference_cache_path(cache_dir, nt, freq_knots, n_draws)
+    if path.exists():
+        values = _read_reference_cache(path, nt, freq_knots, n_draws)
+        print(f"Loaded reference cache {path}", flush=True)
+        return values
+    if require_cache:
+        raise FileNotFoundError(
+            f"Required reference cache is missing: {path}. Run the reference-preparation "
+            "Slurm array first."
+        )
+
+    cfg_wdm, _ = _configs(nt, freq_knots)
+    cal_wdm = wdm_white_noise_calibration(
+        nt * NF, DT, nt, cfg_wdm, n_draws=n_draws
+    )
+    ref_wdm, ref_tang = _finite_resolution_references(nt, cfg_wdm, n_draws)
+    _atomic_savez(
+        path,
+        **_reference_metadata(nt, freq_knots, n_draws),
+        cal_wdm=cal_wdm,
+        ref_wdm=ref_wdm,
+        ref_tang=ref_tang,
+    )
+    print(f"Wrote reference cache {path}", flush=True)
+    return np.asarray(cal_wdm), np.asarray(ref_wdm), np.asarray(ref_tang)
 
 
 def _load_shards(freq_knots: int) -> tuple[np.ndarray, dict[str, list]]:
@@ -402,6 +509,110 @@ def _finite_resolution_references(nt, config, n_draws):
     return wdm_reference, moving_reference / n_draws
 
 
+def _checkpoint_arrays(
+    rep: dict[str, list],
+    *,
+    n_total: int,
+    freq_knots: int,
+    repeat_start: int,
+    repeats_target: int,
+) -> dict[str, object]:
+    completed = len(rep[METRIC_KEYS[0]])
+    return {
+        "n_total": n_total,
+        "nf": NF,
+        "freq_knots": freq_knots,
+        "repeat_start": repeat_start,
+        "repeats_target": repeats_target,
+        "repeat_ids": np.arange(repeat_start, repeat_start + completed),
+        **{f"{key}_samples": np.asarray(rep[key]) for key in METRIC_KEYS},
+    }
+
+
+def _load_checkpoint(
+    path: Path,
+    *,
+    n_total: int,
+    freq_knots: int,
+    repeat_start: int,
+    repeats_target: int,
+) -> dict[str, list]:
+    rep = {key: [] for key in METRIC_KEYS}
+    if not path.exists():
+        return rep
+    expected = {
+        "n_total": n_total,
+        "nf": NF,
+        "freq_knots": freq_knots,
+        "repeat_start": repeat_start,
+        "repeats_target": repeats_target,
+    }
+    with np.load(path) as saved:
+        for key, value in expected.items():
+            actual = int(saved[key])
+            if actual != value:
+                raise ValueError(
+                    f"Checkpoint {path} has {key}={actual}; expected {value}."
+                )
+        repeat_ids = np.asarray(saved["repeat_ids"], dtype=int)
+        wanted = np.arange(repeat_start, repeat_start + repeat_ids.size)
+        if not np.array_equal(repeat_ids, wanted):
+            raise ValueError(f"Checkpoint {path} has non-contiguous repeat IDs.")
+        if repeat_ids.size > repeats_target:
+            raise ValueError(f"Checkpoint {path} contains too many repeats.")
+        for key in METRIC_KEYS:
+            values = np.asarray(saved[f"{key}_samples"])
+            if values.size != repeat_ids.size:
+                raise ValueError(f"Checkpoint {path} has inconsistent metric lengths.")
+            rep[key] = values.tolist()
+    print(
+        f"Resuming {path} after {len(rep[METRIC_KEYS[0]])}/{repeats_target} repeats",
+        flush=True,
+    )
+    return rep
+
+
+def _merge_chunks(
+    nt_values: list[int], freq_knots: int, total_repeats: int, chunk_size: int
+) -> None:
+    if total_repeats % chunk_size:
+        raise ValueError("total repeats must be divisible by chunk size")
+    for nt in nt_values:
+        n_total = nt * NF
+        merged = {key: [] for key in METRIC_KEYS}
+        merged_ids = []
+        for start in range(0, total_repeats, chunk_size):
+            path = _chunk_path(n_total, freq_knots, start, chunk_size)
+            rep = _load_checkpoint(
+                path,
+                n_total=n_total,
+                freq_knots=freq_knots,
+                repeat_start=start,
+                repeats_target=chunk_size,
+            )
+            if len(rep[METRIC_KEYS[0]]) != chunk_size:
+                raise ValueError(
+                    f"Chunk {path} is incomplete: "
+                    f"{len(rep[METRIC_KEYS[0]])}/{chunk_size} repeats."
+                )
+            merged_ids.extend(range(start, start + chunk_size))
+            for key in METRIC_KEYS:
+                merged[key].extend(rep[key])
+        if merged_ids != list(range(total_repeats)):
+            raise ValueError(f"Merged repeat IDs are incomplete for n={n_total}.")
+        output = _shard_path(n_total, freq_knots)
+        _atomic_savez(
+            output,
+            n_total=n_total,
+            nf=NF,
+            freq_knots=freq_knots,
+            repeats=total_repeats,
+            repeat_ids=np.asarray(merged_ids),
+            **{f"{key}_samples": np.asarray(merged[key]) for key in METRIC_KEYS},
+        )
+        print(f"Merged {total_repeats} repeats into {output}", flush=True)
+
+
 def main() -> None:
     global NF
     parser = argparse.ArgumentParser(description=__doc__)
@@ -412,9 +623,22 @@ def main() -> None:
                         help="Number of WDM frequency channels (must be even).")
     parser.add_argument("--reference-draws", type=int, default=1000,
                         help="Monte Carlo draws for each finite-resolution target.")
+    parser.add_argument("--reference-cache-dir", type=Path,
+                        default=FIG_DIR / "reference_cache",
+                        help="Directory containing deterministic per-size references.")
+    parser.add_argument("--prepare-references", action="store_true",
+                        help="Create/load reference caches for --nt and exit.")
+    parser.add_argument("--require-reference-cache", action="store_true",
+                        help="Fail instead of computing a missing reference cache.")
     parser.add_argument("--nt", type=int, nargs="*", default=list(NT_VALUES),
                         help="Time-bin counts to fit (each saved as its own shard); "
                              "pass with no values to make the single-realisation panel.")
+    parser.add_argument("--repeat-start", type=int, default=None,
+                        help="Global first repeat ID; enables resumable chunk output.")
+    parser.add_argument("--merge-chunks", action="store_true",
+                        help="Merge complete chunk checkpoints for --nt and exit.")
+    parser.add_argument("--chunk-size", type=int, default=10,
+                        help="Repeats per chunk when using --merge-chunks.")
     parser.add_argument("--skip-fig1", action="store_true",
                         help="Skip the single-realization triptych (for shard jobs).")
     parser.add_argument("--skip-render", action="store_true",
@@ -431,8 +655,29 @@ def main() -> None:
         parser.error("--nf must be an even integer of at least 2")
     if args.reference_draws < 1:
         parser.error("--reference-draws must be positive")
+    if args.repeats < 1:
+        parser.error("--repeats must be positive")
+    if args.repeat_start is not None and args.repeat_start < 0:
+        parser.error("--repeat-start must be non-negative")
+    if args.chunk_size < 1:
+        parser.error("--chunk-size must be positive")
     NF = args.nf
     FIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.prepare_references:
+        for nt in args.nt:
+            _load_or_create_references(
+                nt,
+                args.freq_knots,
+                args.reference_draws,
+                args.reference_cache_dir,
+                require_cache=False,
+            )
+        return
+
+    if args.merge_chunks:
+        _merge_chunks(args.nt, args.freq_knots, args.repeats, args.chunk_size)
+        return
 
     if args.from_csv is not None:
         durations, raw = _dataframe_to_raw(pd.read_csv(args.from_csv), args.freq_knots)
@@ -488,38 +733,70 @@ def main() -> None:
     div_total = 0
     for nt in args.nt:
         n_total = nt * NF
-        cfg_wdm, _ = _configs(nt, args.freq_knots)
-        cal_wdm = wdm_white_noise_calibration(
-            n_total, DT, nt, cfg_wdm, n_draws=args.reference_draws
+        cal_wdm, ref_wdm, ref_tang = _load_or_create_references(
+            nt,
+            args.freq_knots,
+            args.reference_draws,
+            args.reference_cache_dir,
+            require_cache=args.require_reference_cache,
         )
-        ref_wdm, ref_tang = _finite_resolution_references(
-            nt, cfg_wdm, args.reference_draws
+        repeat_start = 0 if args.repeat_start is None else args.repeat_start
+        output = (
+            _shard_path(n_total, args.freq_knots)
+            if args.repeat_start is None
+            else _chunk_path(n_total, args.freq_knots, repeat_start, args.repeats)
         )
-        rep = {k: [] for k in METRIC_KEYS}
+        rep = _load_checkpoint(
+            output,
+            n_total=n_total,
+            freq_knots=args.freq_knots,
+            repeat_start=repeat_start,
+            repeats_target=args.repeats,
+        )
         t0 = time.time()
-        for r in range(args.repeats):
+        completed = len(rep[METRIC_KEYS[0]])
+        for local_repeat in range(completed, args.repeats):
+            r = repeat_start + local_repeat
             seed = 6000 + r
             data = simulate_ls2(n_total, rng=np.random.default_rng(seed))
-            rw, rt = _fit_both(data, nt, seed, args.freq_knots)
-            div_total += rw["divergences"] + rt["divergences"]
-            mw, cw, ww, nw = _metrics(
-                rw, cal_wdm, log_f0_common, "wdm", ref_wdm
-            )
-            mt, ct, wt, ntarget = _metrics(
-                rt, cal_tang, log_f0_common, "mp", ref_tang
-            )
-            rhat_w, neff_w = _diag_extrema(rw)
-            rhat_t, neff_t = _diag_extrema(rt)
-            rep["wm"].append(mw); rep["tm"].append(mt)
-            rep["wc"].append(cw); rep["tc"].append(ct)
-            rep["ww"].append(ww); rep["tw"].append(wt)
-            rep["wn"].append(nw); rep["tn"].append(ntarget)
-            rep["wt"].append(rw["nuts_runtime_s"]); rep["tt"].append(rt["nuts_runtime_s"])
-            rep["wr"].append(rhat_w); rep["tr"].append(rhat_t)
-            rep["we"].append(neff_w); rep["te"].append(neff_t)
-        np.savez(_shard_path(n_total, args.freq_knots), n_total=n_total, nf=NF,
-                 freq_knots=args.freq_knots, repeats=args.repeats,
-                 **{f"{k}_samples": np.asarray(rep[k]) for k in METRIC_KEYS})
+            rw = rt = None
+            try:
+                rw, rt = _fit_both(data, nt, seed, args.freq_knots)
+                div_total += rw["divergences"] + rt["divergences"]
+                mw, cw, ww, nw = _metrics(
+                    rw, cal_wdm, log_f0_common, "wdm", ref_wdm
+                )
+                mt, ct, wt, ntarget = _metrics(
+                    rt, cal_tang, log_f0_common, "mp", ref_tang
+                )
+                rhat_w, neff_w = _diag_extrema(rw)
+                rhat_t, neff_t = _diag_extrema(rt)
+                rep["wm"].append(mw); rep["tm"].append(mt)
+                rep["wc"].append(cw); rep["tc"].append(ct)
+                rep["ww"].append(ww); rep["tw"].append(wt)
+                rep["wn"].append(nw); rep["tn"].append(ntarget)
+                rep["wt"].append(rw["nuts_runtime_s"]); rep["tt"].append(rt["nuts_runtime_s"])
+                rep["wr"].append(rhat_w); rep["tr"].append(rhat_t)
+                rep["we"].append(neff_w); rep["te"].append(neff_t)
+                _atomic_savez(
+                    output,
+                    **_checkpoint_arrays(
+                        rep,
+                        n_total=n_total,
+                        freq_knots=args.freq_knots,
+                        repeat_start=repeat_start,
+                        repeats_target=args.repeats,
+                    ),
+                )
+                print(
+                    f"n={n_total} repeat={r} checkpointed "
+                    f"({local_repeat + 1}/{args.repeats})",
+                    flush=True,
+                )
+            finally:
+                del rw, rt, data
+                jax.clear_caches()
+                gc.collect()
         print(f"n={n_total:6d}  WDM mse={np.median(rep['wm']):.3f} "
               f"cov={np.mean(rep['wc']):.2f} ciw={np.median(rep['ww']):.2f} "
               f"t={np.median(rep['wt']):.1f}s rhat<={np.max(rep['wr']):.3f} "

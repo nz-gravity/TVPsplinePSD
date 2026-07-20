@@ -30,3 +30,8 @@ jobs:
 
       - name: Run Ruff
         run: uv run ruff check .
+
+      - name: Guard generated artifacts
+        run: |
+          test -z "$(git ls-files 'studies/results/**')"
+          test -z "$(git ls-files '*.png' '*.npz' '*.npy' '*.nc')"
