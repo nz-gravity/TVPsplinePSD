@@ -259,6 +259,7 @@ def fit_log_pspline_surface(
     freq_bin_starts: np.ndarray | None = None,
     binning_metadata: Mapping[str, Any] | None = None,
     initial_state: Any | None = None,
+    likelihood_beta: float = 1.0,
 ) -> dict[str, object]:
     """Fit a smooth ``log S(t, f)`` surface to real time-frequency coefficients.
 
@@ -334,6 +335,8 @@ def fit_log_pspline_surface(
         raise ValueError("time_grid and freq_grid must contain only finite values.")
     if np.any(np.diff(time_grid) <= 0) or np.any(np.diff(freq_grid) <= 0):
         raise ValueError("time_grid and freq_grid must be strictly increasing.")
+    if not 0.0 <= likelihood_beta <= 1.0:
+        raise ValueError("likelihood_beta must lie in [0, 1].")
     validated_time_starts = _validate_bin_starts(
         time_bin_starts, time_grid.size, time_bin, axis="time"
     )
@@ -419,6 +422,7 @@ def fit_log_pspline_surface(
         jnp.asarray(whitened["joint_null"]),
         config,
         False,  # never store the per-sample log_psd surface; reconstruct instead
+        likelihood_beta,
     )
     kernel = NUTS(
         pspline_surface_model,

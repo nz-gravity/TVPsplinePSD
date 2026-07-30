@@ -202,6 +202,7 @@ def pspline_surface_model(
     joint_null: jnp.ndarray,
     config: PSplineConfig,
     store_surface: bool = True,
+    likelihood_beta: float = 1.0,
 ) -> None:
     """Whitened tensor-product log-P-spline model with a Gaussian Whittle likelihood.
 
@@ -246,7 +247,10 @@ def pspline_surface_model(
     log_psd = basis_eig_time @ eig_coeffs @ basis_eig_freq.T
 
     log_like = power_whittle_log_likelihood(summed_power, counts, log_psd)
-    numpyro.factor("whittle", log_like)
+    # Keep the untempered quantity so stepping-stone runners can evaluate
+    # adjacent-rung ratios without trying to reconstruct it from a surface.
+    numpyro.deterministic("log_likelihood", log_like)
+    numpyro.factor("whittle", likelihood_beta * log_like)
     if store_surface:
         # Storing the full surface per sample is convenient but O(n_time*n_freq)
         # memory; large grids reconstruct it from the eigen-coefficients instead.
