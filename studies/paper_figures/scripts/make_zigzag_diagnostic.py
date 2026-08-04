@@ -163,6 +163,66 @@ def draw_coverage(ax, x: np.ndarray) -> None:
         frameon=False, borderaxespad=0.0, handletextpad=0.5, columnspacing=1.4)
 
 
+def draw_grid_contrast(ax_wdm, ax_mp) -> None:
+    """Why log S cannot be assembled as B_t W B_f^T for the moving periodogram.
+
+    Both panels hold the same number of observations over the same box.  WDM
+    spends them as *few times x every frequency* -- a filled rectangle, which is
+    exactly what the two dense matrix products produce.  Tang Definition 1 gives
+    one ordinate per time point, so the same budget is spent as *many times x one
+    frequency each*: a thread through the plane, not a rectangle.
+    """
+    n_f, n_t_wdm = 6, 4
+    n_obs = n_f * n_t_wdm                      # identical budget in both panels
+
+    # WDM: every (time, frequency) cell of a coarse time grid is observed.
+    for it in range(n_t_wdm):
+        for jf in range(n_f):
+            ax_wdm.add_patch(Rectangle(
+                (it * n_f, jf), n_f, 1, facecolor=COL["used"],
+                edgecolor="white", lw=1.0, zorder=2))
+    ax_wdm.set_title(
+        rf"WDM: {n_t_wdm} times $\times$ {n_f} frequencies $=$ {n_obs}"
+        "\n" r"every frequency at every time $\Rightarrow$ "
+        r"$\log S=\mathbf{B}_t\mathbf{W}\mathbf{B}_f^\top$",
+        fontsize=7.6, loc="left", pad=5)
+
+    # Moving periodogram: one ordinate per time, at frequency mod(t).
+    t = np.arange(n_obs)
+    j = t % n_f
+    ax_mp.plot(t + 0.5, j + 0.5, marker="o", ms=3.4, lw=0.6,
+               color=COL["kept"], zorder=3)
+    ax_mp.set_title(
+        rf"moving periodogram: {n_obs} times $\times$ 1 frequency $=$ {n_obs}"
+        "\n" r"one frequency per time $\Rightarrow$ a thread, not a rectangle",
+        fontsize=7.6, loc="left", pad=5)
+
+    for ax in (ax_wdm, ax_mp):
+        for jf in range(n_f + 1):
+            ax.axhline(jf, color=COL["dropped"], lw=0.4, zorder=1)
+        ax.set_xlim(0, n_obs)
+        ax.set_ylim(0, n_f)
+        ax.set_xticks([])
+        ax.set_yticks(np.arange(n_f) + 0.5)
+        ax.set_yticklabels([rf"$f_{{{k + 1}}}$" for k in range(n_f)], fontsize=6.5)
+        ax.set_xlabel("time", fontsize=8)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(length=0)
+
+
+def save_grid_contrast(outdir: Path) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(7.1, 1.95))
+    fig.subplots_adjust(left=0.055, right=0.985, bottom=0.14, top=0.74, wspace=0.16)
+    draw_grid_contrast(*axes)
+    outdir.mkdir(parents=True, exist_ok=True)
+    for ext in ("png", "pdf"):
+        fig.savefig(outdir / f"grid_vs_thread.{ext}",
+                    bbox_inches="tight", pad_inches=0.04)
+    plt.close(fig)
+    print(f"Saved to {outdir / 'grid_vs_thread.png'}")
+
+
 def save_figure(outdir: Path) -> None:
     x = np.random.default_rng(0).standard_normal(T)
     fig = plt.figure(figsize=(7.1, 5.6))
@@ -191,3 +251,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     set_style()
     save_figure(args.outdir)
+    save_grid_contrast(args.outdir)
