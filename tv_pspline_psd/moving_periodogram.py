@@ -1,19 +1,90 @@
-"""Tang-style zigzag moving periodogram + thinned dynamic Whittle.
+"""Zigzag moving periodogram + thinned dynamic Whittle likelihood.
 
-Faithful to the construction of Tang et al. (the ``beyondWhittle`` dynamic
-Whittle): a moving periodogram ordinate is formed from a centred ``2m+1``-point
-window and evaluated at a single Fourier frequency ``lambda_{mod(t)}`` that
-*cycles (zigzags)* with the time index,
+Implements Definitions 1-3 of
+
+    Tang, Kirch, Lee & Meyer, "Bayesian nonparametric spectral analysis of
+    locally stationary processes", JASA (2026).
+    doi:10.1080/01621459.2025.2594191
+
+(the ``beyondWhittle`` dynamic Whittle), with **two boundary deviations that
+are both documented below**. Definition/equation numbers throughout refer to
+that paper. ``tests/test_moving_periodogram.py`` contains an independent
+transcription of Definition 1 written directly from eq. (2.2), which the
+implementation here is checked against.
+
+Definition 1 (moving periodogram ordinate, eq. 2.2)
+---------------------------------------------------
+An ordinate is formed from a centred ``2m+1``-point window and evaluated at a
+single Fourier frequency ``lambda_{mod(t)}`` that *cycles (zigzags)* with the
+time index,
 
     MI_t = |sum_{nu=0}^{2m} X_{nu+t-m} exp(-i pi nu lambda_{mod(t)})|^2
            / (2 pi (2m+1)),   lambda_j = 2j/(2m+1),  mod(t) = 1 + ((t-1) mod m).
 
-The thinned variant keeps blocks of ``m`` ordinates (one per frequency) spaced by
-``i*m`` to reduce correlation. The resulting *scattered* ``(u, omega)`` ordinates
-use the same power/count Whittle likelihood and whitened tensor-product P-spline
-prior as WDM. A Tang ordinate is represented by ``summed_power=2*MI`` and
-``counts=2``; optional binning sums those statistics after thinning. Only the
-time-frequency representation and its surface evaluator differ.
+``mod(t)`` is a function of ``t`` alone: the zigzag frequency cycling is
+present even for a single, unthinned ordinate sequence (``thin=1``) -- it is
+*not* a byproduct of thinning. Thinning only skips whole *blocks* of ordinates;
+it does not create the cycling. (Checked directly in
+``test_zigzag_frequency_matches_tang_mod_t_for_every_thin``.)
+
+Definition 3 (thinned dynamic Whittle, eq. 2.4)
+------------------------------------------------
+With thinning factor ``i``, retain block ``l = 1..B_i``, frequency ``j = 1..m``:
+
+    u_{j,l,i} = (i*(l-1)*m + j) / T,   B_i = ceil((T - m) / (i*m)).
+
+Deviation 1 -- no padding, so windows are shifted by ``+m``
+------------------------------------------------------------
+Definition 3 assumes the series is padded to ``X_{-m+1}, ..., X_{T+m}``, so a
+window may be centred at ``t=1``. This module never pads. It only centres
+windows that lie fully inside the observed data, and sets ``u`` to that
+window's *true* rescaled time, so ``u`` is always the correct physical location
+of the data actually used. In Tang's ``(l, j)`` indexing this is
+
+    u_{j,l,i} = (m + i*(l-1)*m + j) / T          # note the extra leading m
+
+i.e. the first ordinate sits at ``t = m+1`` rather than ``t = 1``. This follows
+the practical recommendation in Tang Sec. 4.1 (without padding, ordinates are
+only available on ``[m/T, 1 - m/T]``) rather than padded Definition 3 verbatim.
+It is internally consistent -- each ordinate's ``u`` and its ``mod(t)``
+frequency are both derived from the same true centre -- but it *is* a different
+formula from eq. (2.4), so comparing numerically against Tang's published
+``u_{j,l,i}`` requires accounting for this offset.
+
+Deviation 2 -- trailing samples are dropped, no ragged final block
+-------------------------------------------------------------------
+``n_blocks = (T - 2m) // (i*m)`` floors, so only whole blocks are kept and a
+tail at the end of the series never enters the likelihood at all:
+
+    unused_tail = ((T - 2m) mod (i*m)) + m*(i - 1)   <  m*(2i - 1)
+
+The first term is the remainder that did not fill a whole block; the second is
+the ``(i-1)m`` stretch after the last retained block, which thinning would have
+skipped in any case. E.g. ``T=1000, m=16, i=2`` uses samples up to index 976,
+dropping 24; ``T=200, m=12, i=3`` drops 56, over a quarter of the record --
+the tail grows with ``i``, which is a further reason not to raise it. (Note
+that samples ``1..m`` at the *start* are not lost: they are not window centres,
+but they do enter the first window as data.) Tang instead
+notes (Sec. 2, after eq. 2.4) that a ragged final block should be appended "to
+ensure that the likelihood contains terms for all observations", and they do so
+in their simulation study. We do not implement that ragged block: the retained
+ordinates are exactly those Definition 3 would give for whole blocks, and the
+dropped tail is at most ``i*m`` samples out of ``T``. This is a deliberate
+simplification, not an oversight -- but it does mean the likelihood here uses
+slightly fewer observations than Tang's.
+
+Likelihood (Definition 2, eq. 2.3)
+-----------------------------------
+The resulting *scattered* ``(u, omega)`` ordinates use the same power/count
+Whittle likelihood and whitened tensor-product P-spline prior as the WDM front
+end. Per Definition 2, ``MI_t / f(t/T, lambda_mod(t)) ~ Exp(1)``, i.e. each
+ordinate contributes ``-log f - MI_t/f`` to the log-likelihood. In the shared
+``power_whittle_log_likelihood(summed_power, counts, log_f)`` form
+(``-0.5*(counts*log_f + summed_power*exp(-log_f))``) that is reproduced exactly
+by ``summed_power=2*MI`` and ``counts=2``; optional binning sums those
+statistics after thinning (never before -- see ``bin_tang_ordinates``: binning
+unthinned, correlated ordinates would overstate the pooled count). Only the
+time-frequency representation and its surface evaluator differ from WDM.
 """
 
 from __future__ import annotations
@@ -67,23 +138,40 @@ def tang_moving_periodogram(
     if not isinstance(thin, (int, np.integer)) or isinstance(thin, bool) or thin < 1:
         raise ValueError("thin must be a positive integer.")
     T = x.size
+    # Tang eq. 2.4: B_i = ceil((T - m) / (i*m)), assuming padded data so a
+    # window can be centred at t=1. We never pad, so a valid centre needs
+    # m samples either side and the usable span is T - 2m, not T - m
+    # (docstring "Deviation 1"). The floor also drops a partial final block
+    # rather than appending Tang's ragged one, leaving a trailing
+    # ((T-2m) mod i*m) + m*(i-1) samples unused (docstring "Deviation 2").
     n_blocks = (T - 2 * m) // (thin * m)
     if n_blocks < 1:
         raise ValueError("Series too short for these (m, thin).")
 
     nu = np.arange(2 * m + 1)
     j = np.arange(1, m + 1)
-    lam = 2.0 * j / (2 * m + 1)        # Fourier frequencies in (0, 1)
+    lam = 2.0 * j / (2 * m + 1)        # Tang lambda_j = 2j/(2m+1), Fourier freqs in (0, 1)
     omega = np.pi * lam               # angular frequency in (0, pi)
-    phase = np.exp(-1j * np.pi * np.outer(nu, lam))  # (2m+1, m)
+    phase = np.exp(-1j * np.pi * np.outer(nu, lam))  # (2m+1, m); Tang exp(-i*pi*nu*lambda_j)
 
     # ``windows[k]`` is the length-(2m+1) window whose 1-based centre is
     # ``t = k + m + 1``.  The retained window starts form an
     # ``(n_blocks, m)`` array, preserving the original block-major ordering.
+    #
+    # window_starts = thin*m*l + j' for block l=0..n_blocks-1, frequency
+    # j'=0..m-1 (0-based). This is Tang's block/frequency structure (blocks
+    # spaced by i*m, m consecutive centres per block) but re-anchored so the
+    # first block starts at the first fully-in-bounds window (k=0, i.e.
+    # t=m+1) instead of Tang's padded t=1.
     windows = np.lib.stride_tricks.sliding_window_view(x, 2 * m + 1)
     window_starts = (
         thin * m * np.arange(n_blocks)[:, None] + np.arange(m)[None, :]
     ).reshape(-1)
+    # freq_index = j' cycles 0..m-1 within each block. Because window_starts
+    # is itself a multiple of m plus j', this equals Tang's
+    # mod(t) - 1 = ((t-1) mod m) for the true centre t below -- i.e. the
+    # zigzag frequency assignment is recovered exactly, and it would remain
+    # exactly the same even at thin=1 (no dependence on thin).
     freq_index = np.tile(np.arange(m), n_blocks)
 
     # Advanced indexing materializes the selected windows and phase rows, so
@@ -101,13 +189,20 @@ def tang_moving_periodogram(
             "pn,pn->p", selected_windows, selected_phase, optimize=True
         )
 
+    # t = true 1-based sample index of each window's centre (the actual data
+    # used, X_{t-m..t+m}). u = t/T is therefore always the correct physical
+    # rescaled time of that window, independent of any (l, j) labelling
+    # convention. In Tang's (l, j) notation (Def. 3) this is
+    # u_{j,l,i} = (m + i*(l-1)*m + j) / T -- the leading "+ m" is the
+    # no-padding boundary offset (docstring "Deviation 1"), not present in
+    # Tang's own (padded) formula.
     t = window_starts + m + 1
-    coeff /= np.sqrt(2.0 * np.pi * (2 * m + 1))
+    coeff /= np.sqrt(2.0 * np.pi * (2 * m + 1))  # Tang eq. 2.2 normalisation, sqrt'd pre-|.|^2
     return {
         "u": t / T,
         "omega": np.tile(omega, n_blocks),
         "coeff": coeff,
-        "mi": np.abs(coeff) ** 2,
+        "mi": np.abs(coeff) ** 2,  # Tang MI_t = |d_t|^2 (eq. 2.2)
     }
 
 
@@ -189,6 +284,10 @@ def bin_tang_ordinates(
     def block_sum(values: np.ndarray) -> np.ndarray:
         return np.add.reduceat(np.add.reduceat(values, ti, axis=0), fi, axis=1)
 
+    # Tang eq. "tang_power_count" (paper's coarse-graining of eq. 2.4): a bin
+    # of a_q ordinates contributes -0.5*(nu_q*log(S) + P_q*exp(-log(S))) with
+    # P_q = 2*sum(MI) and nu_q = 2*a_q; for a_q=1 (no binning) this is
+    # algebraically identical to a single Tang eq. 2.4 factor exp(-MI/S)/S.
     cells = block_sum(np.ones_like(mi_2d))
     summed_power = 2.0 * block_sum(mi_2d)
     counts = 2.0 * cells
@@ -328,6 +427,9 @@ def run_tang_dynamic_whittle_mcmc(
     pilot used for WDM. ``binning_metadata`` can record the JSON-serializable
     pilot settings; the realised partition is always retained in provenance.
     """
+    # Thin first, then bin: thinning is the dependence-control step (Tang
+    # Def. 3); binning correlated, unthinned ordinates would overstate the
+    # pooled count in bin_tang_ordinates.
     ordinates = tang_moving_periodogram(data, m=m, thin=thin)
     observations = bin_tang_ordinates(
         ordinates,

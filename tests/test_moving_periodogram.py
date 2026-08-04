@@ -16,48 +16,145 @@ from tv_pspline_psd.moving_periodogram import (
 )
 
 
-def _scalar_tang_reference(data: np.ndarray, *, m: int, thin: int) -> dict[str, np.ndarray]:
-    """Pre-vectorization construction, retained as a regression oracle."""
-    x = np.asarray(data, dtype=float)
-    T = x.size
-    n_blocks = (T - 2 * m) // (thin * m)
-    nu = np.arange(2 * m + 1)
-    j = np.arange(1, m + 1)
+# ---------------------------------------------------------------------------
+# Paper-faithful oracle.
+#
+# The two functions below are transcribed directly from Tang, Kirch, Lee &
+# Meyer, JASA (2026), doi:10.1080/01621459.2025.2594191, Definition 1 (eq. 2.2).
+# They are deliberately naive -- plain loops, paper notation, no vectorisation --
+# so they can be read side by side with the paper. Unlike
+# a regression oracle (an older copy of our own code, which would share its
+# conventions and so could never detect a departure from the paper), these
+# encode only what the paper states.
+# ---------------------------------------------------------------------------
+
+
+def _tang_mod(t: int, m: int) -> int:
+    """Tang Definition 1: mod(t) = 1 + ((t - 1) mod m), a function of t alone."""
+    return 1 + ((t - 1) % m)
+
+
+def _tang_d(x: np.ndarray, t: int, m: int) -> tuple[complex, float]:
+    """Tang eq. (2.2): the moving Fourier coefficient d_t and its frequency.
+
+    Written straight from the paper, with ``x`` 1-based-indexable via
+    ``x[k - 1]``. Returns ``(d_t, lambda_mod(t))``, where
+
+        d_t = sum_{nu=0}^{2m} X_{nu+t-m} exp(-i pi nu lambda_mod(t))
+              / sqrt(2 pi (2m + 1)),     lambda_j = 2j / (2m + 1)
+
+    and the periodogram ordinate of eq. (2.2) is MI_t = |d_t|^2.
+    """
+    j = _tang_mod(t, m)
     lam = 2.0 * j / (2 * m + 1)
-    omega = np.pi * lam
-    phase = np.exp(-1j * np.pi * np.outer(nu, lam))
-
-    u_out, omega_out, mi_out = [], [], []
-    for block in range(n_blocks):
-        for jj in range(1, m + 1):
-            t = m + thin * block * m + jj
-            window = x[t - m - 1 : t + m]
-            coeff = np.sum(window * phase[:, jj - 1])
-            u_out.append(t / T)
-            omega_out.append(omega[jj - 1])
-            mi_out.append(np.abs(coeff) ** 2 / (2.0 * np.pi * (2 * m + 1)))
-    return {
-        "u": np.asarray(u_out),
-        "omega": np.asarray(omega_out),
-        "mi": np.asarray(mi_out),
-    }
+    total = 0.0 + 0.0j
+    for nu in range(0, 2 * m + 1):
+        total += x[(nu + t - m) - 1] * np.exp(-1j * np.pi * nu * lam)
+    return total / np.sqrt(2.0 * np.pi * (2 * m + 1)), lam
 
 
-def test_vectorized_periodogram_matches_scalar_reference() -> None:
-    rng = np.random.default_rng(42)
-    for n, m, thin in ((127, 4, 2), (256, 7, 3), (1024, 16, 2)):
-        data = rng.standard_normal(n)
-        expected = _scalar_tang_reference(data, m=m, thin=thin)
-        actual = tang_moving_periodogram(data, m=m, thin=thin)
-        np.testing.assert_array_equal(actual["u"], expected["u"])
-        np.testing.assert_array_equal(actual["omega"], expected["omega"])
-        np.testing.assert_allclose(actual["mi"], expected["mi"], rtol=2e-14, atol=2e-14)
-        np.testing.assert_allclose(
-            np.abs(actual["coeff"]) ** 2,
-            actual["mi"],
-            rtol=2e-14,
-            atol=2e-14,
+def _tang_MI(x: np.ndarray, t: int, m: int) -> tuple[float, float]:
+    """Tang eq. (2.2): the moving periodogram ordinate MI_t = |d_t|^2."""
+    d, lam = _tang_d(x, t, m)
+    return abs(d) ** 2, lam
+
+
+def test_each_ordinate_equals_tang_definition_1_at_its_own_time_point() -> None:
+    """Every returned ordinate is exactly Tang eq. (2.2) evaluated at its own t.
+
+    This deliberately does not assume *which* time points are retained (that is
+    the documented boundary deviation); it reads each ordinate's reported time
+    back out of ``u``, and checks the value and the frequency against the paper
+    formula at that time point. So a change in the retained-ordinate convention
+    stays visible in the tests below, while any error in eq. (2.2) itself --
+    normalisation, phase sign, window alignment, or the mod(t) frequency
+    assignment -- fails here.
+    """
+    rng = np.random.default_rng(11)
+    for T, m, thin in ((300, 5, 1), (300, 5, 2), (512, 8, 3), (1000, 16, 2)):
+        x = rng.standard_normal(T)
+        out = tang_moving_periodogram(x, m=m, thin=thin)
+
+        t_all = np.rint(out["u"] * T).astype(int)  # recover the 1-based centre
+        assert np.all(t_all - m >= 1), "window runs off the start of the series"
+        assert np.all(t_all + m <= T), "window runs off the end of the series"
+
+        for t, mi_got, omega_got in zip(t_all, out["mi"], out["omega"]):
+            mi_want, lam_want = _tang_MI(x, int(t), m)
+            np.testing.assert_allclose(mi_got, mi_want, rtol=1e-12, atol=1e-12)
+            # omega = pi * lambda is our angular-frequency convention.
+            np.testing.assert_allclose(omega_got, np.pi * lam_want, rtol=1e-12)
+
+
+def test_complex_coefficient_uses_tang_phase_sign_convention() -> None:
+    """Pin the sign of the retained complex coefficient.
+
+    ``mi`` alone cannot detect a flipped phase sign: for real input, negating
+    the exponent conjugates d_t and ``|d_t|^2`` is unchanged, so the likelihood
+    is genuinely invariant. But ``coeff`` is exposed for a future
+    coefficient-level signal likelihood, where d_t and conj(d_t) are not
+    interchangeable -- so the convention is fixed here against eq. (2.2).
+    """
+    rng = np.random.default_rng(14)
+    for T, m, thin in ((300, 5, 2), (512, 8, 3)):
+        x = rng.standard_normal(T)
+        out = tang_moving_periodogram(x, m=m, thin=thin)
+        t_all = np.rint(out["u"] * T).astype(int)
+        expected = np.asarray([_tang_d(x, int(t), m)[0] for t in t_all])
+        np.testing.assert_allclose(out["coeff"], expected, rtol=1e-12, atol=1e-12)
+
+
+def test_zigzag_frequency_matches_tang_mod_t_for_every_thin() -> None:
+    """The zigzag comes from mod(t), not from thinning.
+
+    Renate's review point: the cycling of the evaluated frequency is part of
+    Definition 1 and is present even unthinned. Here the frequency assigned to
+    each ordinate is checked against ``mod(t) = 1 + ((t-1) mod m)`` for
+    ``thin = 1, 2, 3`` -- identical rule in all three cases.
+    """
+    rng = np.random.default_rng(12)
+    for T, m in ((600, 7), (1000, 16)):
+        x = rng.standard_normal(T)
+        for thin in (1, 2, 3):
+            out = tang_moving_periodogram(x, m=m, thin=thin)
+            t_all = np.rint(out["u"] * T).astype(int)
+            expected_j = np.asarray([_tang_mod(int(t), m) for t in t_all])
+            expected_omega = np.pi * 2.0 * expected_j / (2 * m + 1)
+            np.testing.assert_allclose(out["omega"], expected_omega, rtol=1e-12)
+
+
+def test_documented_boundary_deviations_from_tang_definition_3() -> None:
+    """Pin the two deviations from Definition 3 recorded in the module docstring.
+
+    Deviation 1: no padding, so the first centre is t = m+1, not Tang's t = 1;
+    in Tang's (l, j) indexing u_{j,l,i} = (m + i(l-1)m + j)/T.
+    Deviation 2: whole blocks only, so up to i*m trailing samples are unused
+    (Tang instead appends a ragged final block).
+    """
+    rng = np.random.default_rng(13)
+    for T, m, thin in ((127, 4, 2), (256, 7, 3), (1000, 16, 2), (1024, 16, 2)):
+        out = tang_moving_periodogram(rng.standard_normal(T), m=m, thin=thin)
+        t_all = np.rint(out["u"] * T).astype(int)
+
+        # Deviation 1: first retained centre is m + 1, never Tang's padded t = 1.
+        assert t_all.min() == m + 1
+
+        # Deviation 1: retained centres are exactly Tang's (l, j) grid plus m.
+        n_blocks = (T - 2 * m) // (thin * m)
+        expected_t = np.asarray(
+            [m + thin * l * m + j for l in range(n_blocks) for j in range(1, m + 1)]
         )
+        np.testing.assert_array_equal(t_all, expected_t)
+
+        # Deviation 2: the dropped tail is the unfilled remainder plus the
+        # (i-1)m stretch thinning would have skipped anyway.
+        assert T - (t_all.max() + m) == (T - 2 * m) % (thin * m) + m * (thin - 1)
+        assert T - (t_all.max() + m) < m * (2 * thin - 1)
+
+    # The concrete figure quoted in the module docstring and in the paper.
+    out = tang_moving_periodogram(rng.standard_normal(1000), m=16, thin=2)
+    t_all = np.rint(out["u"] * 1000).astype(int)
+    assert 1000 - (t_all.max() + 16) == 24
 
 
 def test_tang_power_count_likelihood_matches_exponential_form() -> None:
