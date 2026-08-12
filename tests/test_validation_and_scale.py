@@ -110,6 +110,24 @@ def test_fit_surface_validates_shapes_finiteness_and_grids() -> None:
     with pytest.raises(ValueError, match="strictly increasing"):
         fit_log_pspline_surface(coeffs, np.array([0, 1, 1, 2]), np.arange(5), config=config)
 
+    with pytest.raises(ValueError, match="likelihood_mask must match"):
+        fit_log_pspline_surface(
+            coeffs, np.arange(4), np.arange(5), config=config,
+            likelihood_mask=np.ones((3, 5), dtype=bool),
+        )
+
+    with pytest.raises(ValueError, match="boolean"):
+        fit_log_pspline_surface(
+            coeffs, np.arange(4), np.arange(5), config=config,
+            likelihood_mask=np.ones((4, 5)),
+        )
+
+    with pytest.raises(ValueError, match="retain at least one"):
+        fit_log_pspline_surface(
+            coeffs, np.arange(4), np.arange(5), config=config,
+            likelihood_mask=np.zeros((4, 5), dtype=bool),
+        )
+
 
 def test_stft_rejects_untrimmed_dc_and_nyquist() -> None:
     config = PSplineConfig(

@@ -388,7 +388,7 @@ def _render_metrics(
         ax.plot(durations, med(key), marker, color=color, label=label)
         ax.fill_between(durations, q(key, 25), q(key, 75), color=color, alpha=0.18)
 
-    from matplotlib.ticker import FixedLocator, NullFormatter
+    from matplotlib.ticker import FixedLocator, FormatStrFormatter, NullFormatter, NullLocator
 
     fig, (ax_m, ax_c, ax_w, ax_t) = plt.subplots(4, 1, figsize=(3.6, 6.2),
                                                  sharex=True,
@@ -421,8 +421,61 @@ def _render_metrics(
     ax_t.xaxis.set_minor_formatter(NullFormatter())
     ax_t.set_xticklabels([f"{int(d)}" for d in durations], rotation=35, ha="right")
     ax_t.tick_params(axis="x", labelsize=7)
+    ax_w.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    ax_w.yaxis.set_major_locator(FixedLocator([0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]))
+    ax_w.yaxis.set_minor_locator(NullLocator())
+    ax_t.yaxis.set_major_formatter(FormatStrFormatter("%.0f"))
+    ax_t.yaxis.set_major_locator(FixedLocator([10, 20, 30, 40, 60, 80, 100]))
+    ax_t.yaxis.set_minor_locator(NullLocator())
+    for ax in (ax_m, ax_c, ax_w):
+        ax.tick_params(axis="x", which="both", bottom=False, top=False,
+                       labelbottom=False)
+        ax.xaxis.set_minor_locator(NullLocator())
 
     fig.savefig(FIG_DIR / "sim_mse_coverage.png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+    # The WDM manuscript reports its own scaling study; the two-likelihood
+    # comparison above belongs to the moving-periodogram companion paper.
+    fig, (ax_m, ax_c, ax_w, ax_t) = plt.subplots(4, 1, figsize=(3.6, 6.2),
+                                                 sharex=True,
+                                                 constrained_layout=True)
+    _band(ax_m, "wm", "tab:blue", "o-", "WDM")
+    ax_m.set_xscale("log"); ax_m.set_yscale("log")
+    ax_m.set_ylabel(r"$\mathrm{MSE}_{\log f}$")
+
+    coverage = np.array([np.mean(a) for a in raw["wc"]])
+    ax_c.semilogx(durations, coverage, "o-", color="tab:blue")
+    ax_c.fill_between(durations, q("wc", 25), q("wc", 75),
+                      color="tab:blue", alpha=0.18)
+    ax_c.axhline(0.9, ls=":", color="black")
+    ax_c.set_ylim(0.85, 0.96)
+    ax_c.set_ylabel(r"$90\%$ coverage")
+
+    _band(ax_w, "ww", "tab:blue", "o-", "WDM")
+    ax_w.set_xscale("log"); ax_w.set_yscale("log")
+    ax_w.set_ylabel(r"$90\%$ CI width")
+
+    _band(ax_t, "wt", "tab:blue", "o-", "WDM")
+    ax_t.set_xscale("log"); ax_t.set_yscale("log")
+    ax_t.set_ylabel("Wall time [s]")
+    ax_t.set_xlabel("Number of observations $n$")
+    ax_t.xaxis.set_major_locator(FixedLocator(list(durations)))
+    ax_t.xaxis.set_minor_formatter(NullFormatter())
+    ax_t.set_xticklabels([f"{int(d)}" for d in durations], rotation=35, ha="right")
+    ax_t.tick_params(axis="x", labelsize=7)
+    ax_w.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    ax_w.yaxis.set_major_locator(FixedLocator([0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]))
+    ax_w.yaxis.set_minor_locator(NullLocator())
+    ax_t.yaxis.set_major_formatter(FormatStrFormatter("%.0f"))
+    ax_t.yaxis.set_major_locator(FixedLocator([10, 20, 30, 40, 60, 80, 100]))
+    ax_t.yaxis.set_minor_locator(NullLocator())
+    for ax in (ax_m, ax_c, ax_w):
+        ax.tick_params(axis="x", which="both", bottom=False, top=False,
+                       labelbottom=False)
+        ax.xaxis.set_minor_locator(NullLocator())
+
+    fig.savefig(FIG_DIR / "sim_wdm_scaling.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
     # Diagnostic decomposition: the common analytic target is the primary
@@ -614,7 +667,7 @@ def _merge_chunks(
 
 
 def main() -> None:
-    global NF
+    global FIG_DIR, NF
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeats", type=int, default=100)
     parser.add_argument("--freq-knots", type=int, default=DEFAULT_FREQ_KNOTS,
@@ -648,7 +701,13 @@ def main() -> None:
     parser.add_argument("--from-csv", type=Path, default=None,
                         help="Re-render Figure 3 from a (possibly hand-edited) "
                              "sim_metrics.csv instead of the npz shards.")
+    parser.add_argument("--output-dir", type=Path, default=None,
+                        help="Directory for rendered figures (defaults to the study figures directory).")
     args = parser.parse_args()
+
+    if args.output_dir is not None:
+        FIG_DIR = args.output_dir.resolve()
+        FIG_DIR.mkdir(parents=True, exist_ok=True)
     if args.freq_knots < 1:
         parser.error("--freq-knots must be positive")
     if args.nf < 2 or args.nf % 2:

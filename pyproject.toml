@@ -31,6 +31,8 @@ lisa = [
     "gpubackendtools",
     "pandas",
     "ripplegw",
+    "backgrounds>=0.1.4",
+    "segwo>=1.2.0",
 ]
 
 [tool.ruff]

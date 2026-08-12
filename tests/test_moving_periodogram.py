@@ -71,9 +71,12 @@ def test_each_ordinate_equals_tang_definition_1_at_its_own_time_point() -> None:
     assignment -- fails here.
     """
     rng = np.random.default_rng(11)
-    for T, m, thin in ((300, 5, 1), (300, 5, 2), (512, 8, 3), (1000, 16, 2)):
+    for T, m, thin in ((20, 5, 1), (20, 5, 2), (512, 8, 3), (1000, 16, 2)):
         x = rng.standard_normal(T)
         out = tang_moving_periodogram(x, m=m, thin=thin)
+
+        print(f"T={T}, m={m}, thin={thin}, n_ordinates={len(out['u'])}")
+        print(out)
 
         t_all = np.rint(out["u"] * T).astype(int)  # recover the 1-based centre
         assert np.all(t_all - m >= 1), "window runs off the start of the series"

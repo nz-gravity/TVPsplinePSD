@@ -96,6 +96,53 @@ def test_block_constant_surface_has_exact_coarse_grained_likelihood() -> None:
     np.testing.assert_allclose(coarse, exact, rtol=1e-13, atol=1e-13)
 
 
+def test_likelihood_mask_removes_power_and_log_normalization() -> None:
+    power = np.arange(1.0, 21.0).reshape(4, 5)
+    time_grid = np.arange(4, dtype=float)
+    freq_grid = np.arange(5, dtype=float)
+    mask = np.ones_like(power, dtype=bool)
+    mask[1, 2:4] = False
+    mask[3, 0] = False
+
+    masked_power, _, _, masked_counts = bin_power_rectangular(
+        power,
+        time_grid,
+        freq_grid,
+        1,
+        likelihood_mask=mask,
+    )
+    log_psd = np.linspace(-0.4, 0.7, power.size).reshape(power.shape)
+    actual = power_whittle_log_likelihood(
+        jnp.asarray(masked_power), jnp.asarray(masked_counts), jnp.asarray(log_psd)
+    )
+    expected = power_whittle_log_likelihood(
+        jnp.asarray(power[mask]), 1.0, jnp.asarray(log_psd[mask])
+    )
+
+    np.testing.assert_array_equal(masked_power, np.where(mask, power, 0.0))
+    np.testing.assert_array_equal(masked_counts, mask.astype(int))
+    np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-13)
+
+
+def test_masked_rectangular_binning_preserves_retained_counts_and_power() -> None:
+    power = np.arange(1.0, 36.0).reshape(5, 7)
+    mask = np.ones_like(power, dtype=bool)
+    mask[1:4, 2:5] = False
+
+    blocked_power, _, _, blocked_counts = bin_power_rectangular(
+        power,
+        np.arange(5, dtype=float),
+        np.arange(7, dtype=float),
+        2,
+        time_bin=2,
+        freq_bin_starts=np.array([0, 3, 4]),
+        likelihood_mask=mask,
+    )
+
+    assert blocked_counts.sum() == 2 * mask.sum()
+    assert blocked_power.sum() == np.sum(power[mask])
+
+
 def test_adaptive_frequency_bins_refine_a_sharp_feature() -> None:
     freq = np.linspace(0.0, 1.0, 101)
     pilot = -4.0 * np.exp(-0.5 * ((freq - 0.5) / 0.025) ** 2)[None, :]

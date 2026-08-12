@@ -37,7 +37,8 @@ FIG_DIR = Path(__file__).resolve().parents[1] / "figures"
 # Short series and small order so the whole record fits one shared time axis:
 # every panel then lines up column-for-column, and the m-sample head offset is
 # wide enough on the page to actually see.
-T, M = 200, 12
+DEFAULT_T, DEFAULT_M = 200, 12
+T, M = DEFAULT_T, DEFAULT_M
 THINS = (1, 2, 3)
 
 COL = {
@@ -71,6 +72,15 @@ def ordinate_times(x: np.ndarray, thin: int) -> tuple[np.ndarray, np.ndarray]:
     # Recover j from omega = pi * 2j/(2m+1); exact for the rungs actually used.
     j = np.rint(out["omega"] * (2 * M + 1) / (2.0 * np.pi)).astype(int)
     return t, j
+
+
+def print_step_trace(x: np.ndarray) -> None:
+    """Print the sampled zigzag path as (time -> frequency-index) steps."""
+    print(f"Step trace (T={T}, m={M})")
+    for thin in THINS:
+        t, j = ordinate_times(x, thin)
+        steps = ", ".join(f"t={tt}->f_{jj}" for tt, jj in zip(t, j, strict=False))
+        print(f"  i={thin}: {steps}")
 
 
 def draw_zigzag(axes, x: np.ndarray) -> None:
@@ -225,6 +235,7 @@ def save_grid_contrast(outdir: Path) -> None:
 
 def save_figure(outdir: Path) -> None:
     x = np.random.default_rng(0).standard_normal(T)
+    print_step_trace(x)
     fig = plt.figure(figsize=(7.1, 5.6))
     gs = fig.add_gridspec(4, 1, height_ratios=[1, 1, 1, 1.30],
                           left=0.085, right=0.985, bottom=0.165, top=0.895,
@@ -248,7 +259,19 @@ def save_figure(outdir: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--outdir", type=Path, default=FIG_DIR)
+    parser.add_argument("--T", type=int, default=DEFAULT_T,
+                        help="time-series length")
+    parser.add_argument("--m", type=int, default=DEFAULT_M,
+                        help="moving-periodogram order")
     args = parser.parse_args()
+    if args.T <= 0:
+        raise ValueError("T must be positive")
+    if args.m <= 0:
+        raise ValueError("m must be positive")
+
+    T = args.T
+    M = args.m
+
     set_style()
     save_figure(args.outdir)
     save_grid_contrast(args.outdir)

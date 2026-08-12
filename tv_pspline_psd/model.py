@@ -203,6 +203,7 @@ def pspline_surface_model(
     config: PSplineConfig,
     store_surface: bool = True,
     likelihood_beta: float = 1.0,
+    log_psd_offset: jnp.ndarray | None = None,
 ) -> None:
     """Whitened tensor-product log-P-spline model with a Gaussian Whittle likelihood.
 
@@ -234,6 +235,9 @@ def pspline_surface_model(
         lam_freq: Eigenvalues of the frequency penalty, shape ``(K_f,)``.
         joint_null: Boolean mask ``(K_t, K_f)`` of the joint penalty null space.
         config: Estimator configuration.
+        log_psd_offset: Optional fixed log-PSD surface on the likelihood grid.
+            The sampled spline is an unrestricted log-multiplicative residual
+            around this reference. A zero array recovers the original model.
     """
     eig_coeffs = sample_tensor_eigen_coefficients(
         basis_eig_time,
@@ -244,7 +248,12 @@ def pspline_surface_model(
         config,
     )
 
-    log_psd = basis_eig_time @ eig_coeffs @ basis_eig_freq.T
+    log_psd_residual = basis_eig_time @ eig_coeffs @ basis_eig_freq.T
+    log_psd = (
+        log_psd_residual
+        if log_psd_offset is None
+        else log_psd_offset + log_psd_residual
+    )
 
     log_like = power_whittle_log_likelihood(summed_power, counts, log_psd)
     # Keep the untempered quantity so stepping-stone runners can evaluate
@@ -254,6 +263,91 @@ def pspline_surface_model(
     if store_surface:
         # Storing the full surface per sample is convenient but O(n_time*n_freq)
         # memory; large grids reconstruct it from the eigen-coefficients instead.
+        numpyro.deterministic("log_psd", log_psd)
+
+
+def nested_residual_surface_model(
+    summed_power: jnp.ndarray,
+    counts: jnp.ndarray,
+    basis_interaction_time: jnp.ndarray,
+    basis_eig_freq: jnp.ndarray,
+    lam_interaction_time: jnp.ndarray,
+    lam_freq: jnp.ndarray,
+    joint_null_interaction: jnp.ndarray,
+    null_freq: jnp.ndarray,
+    config: PSplineConfig,
+    interaction_scale_prior: float = 0.5,
+    store_surface: bool = True,
+    likelihood_beta: float = 1.0,
+    log_psd_offset: jnp.ndarray | None = None,
+) -> None:
+    r"""Reference residual ``g(f) + h(t,f)`` with shrinkable interaction.
+
+    ``g`` is a stationary frequency P-spline. ``h`` is evaluated in a time
+    basis whose columns have zero mean, so it cannot reproduce or confound the
+    stationary correction. A global half-Normal scale shrinks the interaction
+    toward zero when the data do not support residual time variation.
+
+    The interaction roughness shape is fixed while its global amplitude is
+    inferred: otherwise a free global amplitude and free roughness precision
+    can cancel each other, leaving the amount of time variation weakly
+    identified. The stationary frequency smoothness remains inferred through
+    ``phi_stationary``.
+    """
+    if not config.centered:
+        raise ValueError("nested residual inference currently requires centered=True")
+
+    phi_stationary = _sample_log_gamma(
+        "phi_stationary",
+        config.alpha_phi,
+        config.beta_phi,
+        config.phi_log_base_scale,
+    )
+    stationary_scale = jnp.where(
+        null_freq,
+        1.0 / jnp.sqrt(config.null_precision),
+        1.0 / jnp.sqrt(phi_stationary * lam_freq + config.ridge_eps),
+    )
+    g = sample_eigen_coefficients(
+        "g", stationary_scale, (basis_eig_freq.shape[1],), config
+    )
+    log_stationary = basis_eig_freq @ g
+
+    interaction_scale = jnp.where(
+        joint_null_interaction,
+        1.0,
+        1.0
+        / jnp.sqrt(
+            lam_interaction_time[:, None] + lam_freq[None, :] + config.ridge_eps
+        ),
+    )
+    sigma_interaction = numpyro.sample(
+        "sigma_interaction", dist.HalfNormal(interaction_scale_prior)
+    )
+    # Centered hierarchy: the large ESA likelihood strongly identifies the
+    # interaction away from zero. Sampling h directly at its hierarchical
+    # scale avoids the long sigma*z funnel observed with a non-centred block.
+    h = sample_eigen_coefficients(
+        "h",
+        sigma_interaction * interaction_scale,
+        interaction_scale.shape,
+        config,
+    )
+    log_interaction = (
+        basis_interaction_time
+        @ h
+        @ basis_eig_freq.T
+    )
+    log_psd_residual = log_stationary[None, :] + log_interaction
+    log_psd = (
+        log_psd_residual
+        if log_psd_offset is None
+        else log_psd_offset + log_psd_residual
+    )
+    log_like = power_whittle_log_likelihood(summed_power, counts, log_psd)
+    numpyro.deterministic("log_likelihood", log_like)
+    numpyro.factor("whittle", likelihood_beta * log_like)
+    if store_surface:
         numpyro.deterministic("log_psd", log_psd)
 
 

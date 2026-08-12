@@ -50,6 +50,11 @@ def test_save_load_regenerates_surface(tmp_path):
     assert metadata["binning"]["output_shape"] == [11, 23]
     assert metadata["binning"]["time"]["widths"] == [2] * 11
     assert metadata["binning"]["selector"]["time"]["requested_width"] == 2
+    assert metadata["likelihood_mask"]["applied"] is False
+    np.testing.assert_array_equal(
+        idata["constant_data"]["likelihood_mask"].values,
+        res["likelihood_mask"],
+    )
 
     # Regenerating the surface from the saved sites reproduces the fit exactly.
     surf = surface_from_idata(idata)
@@ -57,6 +62,7 @@ def test_save_load_regenerates_surface(tmp_path):
     np.testing.assert_allclose(surf["log_psd_lower"], res["log_psd_lower"], atol=1e-9)
     np.testing.assert_allclose(surf["log_psd_upper"], res["log_psd_upper"], atol=1e-9)
     np.testing.assert_allclose(surf["psd_geometric_mean"], res["psd_mean"])
+    np.testing.assert_array_equal(surf["likelihood_mask"], res["likelihood_mask"])
 
     dense = surface_from_idata(idata, n_time_dense=40, n_freq_dense=40)
     assert dense["psd_mean"].shape == (40, 40)

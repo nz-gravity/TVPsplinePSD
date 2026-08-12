@@ -22,6 +22,8 @@ from .adaptive_knots import fit_adaptive_knots
 from .config import PSplineConfig
 from .model import (
     initialize_with_penalized_least_squares,
+    nested_residual_surface_model,
+    power_floor,
     pspline_surface_model,
     whiten_penalty_pair,
     whitened_init_values,
@@ -65,6 +67,26 @@ def _validate_bin_starts(
     return starts
 
 
+def _validate_likelihood_mask(
+    likelihood_mask: np.ndarray | None,
+    shape: tuple[int, int],
+) -> np.ndarray:
+    """Return a boolean per-cell likelihood mask on the analysis grid."""
+    if likelihood_mask is None:
+        return np.ones(shape, dtype=bool)
+    mask = np.asarray(likelihood_mask)
+    if mask.shape != shape:
+        raise ValueError(
+            "likelihood_mask must match the (time, frequency) analysis grid: "
+            f"expected {shape}, got {mask.shape}."
+        )
+    if mask.dtype != np.bool_:
+        raise ValueError("likelihood_mask must contain boolean values.")
+    if not np.any(mask):
+        raise ValueError("likelihood_mask must retain at least one analysis cell.")
+    return mask
+
+
 def bin_power_rectangular(
     power: np.ndarray,
     time_grid: np.ndarray,
@@ -75,6 +97,7 @@ def bin_power_rectangular(
     freq_bin: int = 1,
     time_bin_starts: np.ndarray | None = None,
     freq_bin_starts: np.ndarray | None = None,
+    likelihood_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Sum powers over a separable rectangular time--frequency partition.
 
@@ -89,6 +112,7 @@ def bin_power_rectangular(
         raise ValueError("power shape must match time_grid and freq_grid.")
     if not isinstance(n_components, (int, np.integer)) or n_components < 1:
         raise ValueError("n_components must be a positive integer.")
+    mask = _validate_likelihood_mask(likelihood_mask, power.shape)
 
     time_starts = _validate_bin_starts(
         time_bin_starts, time_grid.size, time_bin, axis="time"
@@ -99,14 +123,48 @@ def bin_power_rectangular(
     time_sizes = np.diff(np.r_[time_starts, time_grid.size])
     freq_sizes = np.diff(np.r_[freq_starts, freq_grid.size])
 
-    power_blocks = np.add.reduceat(power, time_starts, axis=0)
+    power_blocks = np.add.reduceat(np.where(mask, power, 0.0), time_starts, axis=0)
     power_blocks = np.add.reduceat(power_blocks, freq_starts, axis=1)
     time_grid_blocks = np.add.reduceat(time_grid, time_starts) / time_sizes
     freq_grid_blocks = np.add.reduceat(freq_grid, freq_starts) / freq_sizes
-    counts_blocks = (
-        int(n_components) * time_sizes[:, None] * freq_sizes[None, :]
-    )
+    if likelihood_mask is None:
+        counts_blocks = (
+            int(n_components) * time_sizes[:, None] * freq_sizes[None, :]
+        )
+    else:
+        counts_blocks = np.add.reduceat(mask.astype(int), time_starts, axis=0)
+        counts_blocks = np.add.reduceat(counts_blocks, freq_starts, axis=1)
+        counts_blocks *= int(n_components)
     return power_blocks, time_grid_blocks, freq_grid_blocks, counts_blocks
+
+
+def _mean_power_for_masked_initialization(
+    summed_power: np.ndarray,
+    counts: np.ndarray,
+) -> np.ndarray:
+    """Fill masked cells for initialization without changing the target.
+
+    Retained cells use their per-component mean power. Missing cells are filled
+    by log-linear frequency interpolation within each likelihood row. A fully
+    masked row receives the global retained-cell median. These values seed NUTS
+    only; masked cells still have zero power and zero count in the likelihood.
+    """
+    summed_power = np.asarray(summed_power, dtype=float)
+    counts = np.broadcast_to(np.asarray(counts, dtype=float), summed_power.shape)
+    valid = (counts > 0.0) & (summed_power > 0.0)
+    retained = summed_power[valid] / counts[valid]
+    global_fill = float(np.median(retained)) if retained.size else 1.0
+    output = np.empty_like(summed_power)
+    frequency_index = np.arange(summed_power.shape[1], dtype=float)
+    for row in range(summed_power.shape[0]):
+        row_valid = valid[row]
+        if np.any(row_valid):
+            locations = frequency_index[row_valid]
+            values = np.log(summed_power[row, row_valid] / counts[row, row_valid])
+            output[row] = np.exp(np.interp(frequency_index, locations, values))
+        else:
+            output[row] = global_fill
+    return output
 
 
 def adaptive_frequency_bin_starts(
@@ -258,6 +316,11 @@ def fit_log_pspline_surface(
     time_bin_starts: np.ndarray | None = None,
     freq_bin_starts: np.ndarray | None = None,
     binning_metadata: Mapping[str, Any] | None = None,
+    likelihood_mask: np.ndarray | None = None,
+    log_psd_offset: np.ndarray | None = None,
+    residual_structure: str = "tensor",
+    interaction_scale_prior: float = 0.5,
+    interaction_time_knots: int = 5,
     initial_state: Any | None = None,
     likelihood_beta: float = 1.0,
 ) -> dict[str, object]:
@@ -304,6 +367,27 @@ def fit_log_pspline_surface(
             variable partition was selected (for example the pilot smoother,
             tolerance, and maximum width). The realised starts and widths are
             always recorded automatically in provenance.
+        likelihood_mask: Optional boolean array with shape ``(n_time, n_freq)``.
+            ``False`` cells contribute neither squared power nor the ``log S``
+            normalization to the likelihood. The spline is still evaluated on
+            the complete grid, so callers must retain this mask and treat the
+            corresponding surface values as prior-driven interpolation rather
+            than recovered PSD estimates.
+        log_psd_offset: Optional fixed log-PSD surface with shape
+            ``(n_time, n_freq)`` in the same units as ``coeffs**2``. The spline
+            then models a free log-multiplicative residual around this reference.
+            This is useful for placing known transfer-function structure in the
+            mean without fixing the unknown PSD level or smooth departures.
+        residual_structure: ``"tensor"`` for the original unrestricted
+            tensor residual, or ``"stationary_plus_interaction"`` for an
+            explicit stationary correction ``g(f)`` plus a zero-time-mean,
+            shrinkable interaction ``h(t,f)``.
+        interaction_scale_prior: Half-Normal scale for the log-PSD interaction
+            amplitude in the nested residual model.
+        interaction_time_knots: Interior-knot count for the interaction's own
+            deliberately coarse time basis. This is independent of
+            ``config.n_interior_knots_time`` used by the unrestricted tensor
+            model.
         initial_state: Optional ``last_state`` from a previous result on the
             same model dimensions. When supplied, warmup is skipped and the
             persistent NUTS chain (positions plus adapted step size and mass
@@ -337,6 +421,22 @@ def fit_log_pspline_surface(
         raise ValueError("time_grid and freq_grid must be strictly increasing.")
     if not 0.0 <= likelihood_beta <= 1.0:
         raise ValueError("likelihood_beta must lie in [0, 1].")
+    if residual_structure not in {"tensor", "stationary_plus_interaction"}:
+        raise ValueError(
+            "residual_structure must be 'tensor' or 'stationary_plus_interaction'"
+        )
+    if not np.isfinite(interaction_scale_prior) or interaction_scale_prior <= 0.0:
+        raise ValueError("interaction_scale_prior must be finite and positive")
+    if (
+        not isinstance(interaction_time_knots, (int, np.integer))
+        or isinstance(interaction_time_knots, bool)
+        or interaction_time_knots < 0
+    ):
+        raise ValueError("interaction_time_knots must be a non-negative integer")
+    if residual_structure == "stationary_plus_interaction" and not config.centered:
+        raise ValueError(
+            "stationary_plus_interaction currently requires config.centered=True"
+        )
     validated_time_starts = _validate_bin_starts(
         time_bin_starts, time_grid.size, time_bin, axis="time"
     )
@@ -344,12 +444,27 @@ def fit_log_pspline_surface(
         freq_bin_starts, freq_grid.size, freq_bin, axis="freq"
     )
     power = np.sum(coeffs**2, axis=0)  # summed squared components per cell
+    mask_applied = likelihood_mask is not None
+    validated_likelihood_mask = _validate_likelihood_mask(
+        likelihood_mask, power.shape
+    )
+    if log_psd_offset is None:
+        validated_log_offset = np.zeros_like(power)
+        offset_applied = False
+    else:
+        validated_log_offset = np.asarray(log_psd_offset, dtype=float)
+        if validated_log_offset.shape != power.shape:
+            raise ValueError("log_psd_offset must match the (time, frequency) grid")
+        if not np.isfinite(validated_log_offset).all():
+            raise ValueError("log_psd_offset must contain only finite values")
+        offset_applied = True
     spline = _prepare_spline_bases(
         power,
         time_grid,
         freq_grid,
         config,
         n_components=coeffs.shape[0],
+        likelihood_mask=(validated_likelihood_mask if mask_applied else None),
         interior_knots_time=interior_knots_time,
         interior_knots_freq=interior_knots_freq,
     )
@@ -366,6 +481,35 @@ def fit_log_pspline_surface(
     whitened = whiten_penalty_pair(P_time, P_freq)
     basis_eig_time = B_time @ whitened["U_time"]
     basis_eig_freq = B_freq @ whitened["U_freq"]
+    nested = residual_structure == "stationary_plus_interaction"
+    if nested:
+        B_time_interaction_full, knots_time_interaction = create_bspline_basis(
+            time_grid,
+            interaction_time_knots,
+            degree=config.degree_time,
+        )
+        P_time_interaction_full = create_bspline_roughness_penalty(
+            knots_time_interaction,
+            degree=config.degree_time,
+            derivative_order=config.diff_order_time,
+        )
+        # Partition unity makes the final centered B-spline column redundant.
+        # Dropping it yields a full-rank basis spanning all zero-time-mean
+        # spline functions, so h(t,f) cannot absorb the stationary g(f).
+        time_basis_mean = B_time_interaction_full.mean(axis=0)
+        B_time_interaction = (
+            B_time_interaction_full - time_basis_mean[None, :]
+        )[:, :-1]
+        P_time_interaction = P_time_interaction_full[:-1, :-1]
+        whitened_interaction = whiten_penalty_pair(P_time_interaction, P_freq)
+        basis_interaction_time = (
+            B_time_interaction @ whitened_interaction["U_time"]
+        )
+        basis_nested_freq = B_freq @ whitened_interaction["U_freq"]
+        null_nested_freq = (
+            whitened_interaction["lam_freq"]
+            <= 1e-10 * max(whitened_interaction["lam_freq"].max(), 1.0)
+        )
 
     n_components = coeffs.shape[0]
     coarse_grained = (
@@ -386,6 +530,7 @@ def fit_log_pspline_surface(
                 validated_time_starts if time_bin_starts is not None else None
             ),
             freq_bin_starts=validated_freq_starts if freq_bin_starts is not None else None,
+            likelihood_mask=(validated_likelihood_mask if mask_applied else None),
         )
         B_time_fit = evaluate_bspline_basis(
             time_grid_fit, knots_time, degree=config.degree_time
@@ -397,35 +542,156 @@ def fit_log_pspline_surface(
         )
         basis_eig_time_fit = B_time_fit @ whitened["U_time"]
         basis_eig_freq_fit = B_freq_fit @ whitened["U_freq"]
+        offset_sum = np.add.reduceat(
+            np.where(validated_likelihood_mask, validated_log_offset, 0.0),
+            validated_time_starts if time_bin_starts is not None else _regular_bin_starts(time_grid.size, time_bin),
+            axis=0,
+        )
+        offset_sum = np.add.reduceat(
+            offset_sum,
+            validated_freq_starts if freq_bin_starts is not None else _regular_bin_starts(freq_grid.size, freq_bin),
+            axis=1,
+        )
+        offset_counts = np.add.reduceat(
+            validated_likelihood_mask.astype(int),
+            validated_time_starts if time_bin_starts is not None else _regular_bin_starts(time_grid.size, time_bin),
+            axis=0,
+        )
+        offset_counts = np.add.reduceat(
+            offset_counts,
+            validated_freq_starts if freq_bin_starts is not None else _regular_bin_starts(freq_grid.size, freq_bin),
+            axis=1,
+        )
+        log_offset_fit = np.divide(
+            offset_sum,
+            offset_counts,
+            out=np.zeros_like(offset_sum),
+            where=offset_counts > 0,
+        )
     else:
-        power_fit = power
-        counts_fit = n_components
+        if mask_applied:
+            power_fit = np.where(validated_likelihood_mask, power, 0.0)
+            counts_fit = n_components * validated_likelihood_mask.astype(int)
+        else:
+            power_fit = power
+            counts_fit = n_components
         B_time_fit = B_time
         B_freq_fit = B_freq
+        time_grid_fit = time_grid
         basis_eig_time_fit = basis_eig_time
         basis_eig_freq_fit = basis_eig_freq
+        log_offset_fit = validated_log_offset
+
+    if nested:
+        B_time_interaction_fit_full = evaluate_bspline_basis(
+            time_grid_fit,
+            knots_time_interaction,
+            degree=config.degree_time,
+        )
+        B_time_interaction_fit = (
+            B_time_interaction_fit_full - time_basis_mean[None, :]
+        )[:, :-1]
+        basis_interaction_time_fit = (
+            B_time_interaction_fit @ whitened_interaction["U_time"]
+        )
+        basis_nested_freq_fit = B_freq_fit @ whitened_interaction["U_freq"]
 
     # The warm start fits log S to the per-component mean power, matching the
     # likelihood mode (S = mean of squared components), on the fit grid.
-    pls_init = initialize_with_penalized_least_squares(
-        power_fit / counts_fit, B_time_fit, B_freq_fit, P_time, P_freq, config
+    init_power = (
+        _mean_power_for_masked_initialization(power_fit, counts_fit)
+        if mask_applied
+        else power_fit / counts_fit
     )
-    init_sites = whitened_init_values(pls_init, whitened, config)
-
-    model_args = (
-        jnp.asarray(power_fit),
-        jnp.asarray(counts_fit),
-        jnp.asarray(basis_eig_time_fit),
-        jnp.asarray(basis_eig_freq_fit),
-        jnp.asarray(whitened["lam_time"]),
-        jnp.asarray(whitened["lam_freq"]),
-        jnp.asarray(whitened["joint_null"]),
-        config,
-        False,  # never store the per-sample log_psd surface; reconstruct instead
-        likelihood_beta,
-    )
+    init_power = init_power * np.exp(-log_offset_fit)
+    if nested:
+        target = np.log(init_power + power_floor(init_power))
+        count_weights = np.broadcast_to(
+            np.asarray(counts_fit, dtype=float), target.shape
+        )
+        stationary_target = np.divide(
+            np.sum(target * count_weights, axis=0),
+            count_weights.sum(axis=0),
+            out=np.median(target, axis=0),
+            where=count_weights.sum(axis=0) > 0,
+        )
+        lam_f = whitened_interaction["lam_freq"]
+        g_system = (
+            basis_nested_freq_fit.T @ basis_nested_freq_fit
+            + config.init_penalty_freq * np.diag(lam_f)
+            + config.ridge_eps * np.eye(lam_f.size)
+        )
+        g_init = np.linalg.solve(
+            g_system, basis_nested_freq_fit.T @ stationary_target
+        )
+        phi_stationary_init = max(
+            1e-2,
+            g_init.size / (float(np.sum(lam_f * g_init**2)) + 1e-6),
+        )
+        interaction_target = target - (basis_nested_freq_fit @ g_init)[None, :]
+        interaction_power = np.exp(interaction_target)
+        interaction_pls = initialize_with_penalized_least_squares(
+            interaction_power,
+            B_time_interaction_fit,
+            B_freq_fit,
+            P_time_interaction,
+            P_freq,
+            config,
+        )
+        h_eig_init = (
+            whitened_interaction["U_time"].T
+            @ np.asarray(interaction_pls["W"])
+            @ whitened_interaction["U_freq"]
+        )
+        h_surface_init = (
+            basis_interaction_time_fit
+            @ h_eig_init
+            @ basis_nested_freq_fit.T
+        )
+        sigma_init = float(np.clip(np.std(h_surface_init), 0.05, 1.0))
+        init_sites = {
+            "g": g_init,
+            "h": h_eig_init.reshape(-1),
+            "phi_stationary": float(np.log(phi_stationary_init)),
+            "sigma_interaction": sigma_init,
+        }
+        model = nested_residual_surface_model
+        model_args = (
+            jnp.asarray(power_fit),
+            jnp.asarray(counts_fit),
+            jnp.asarray(basis_interaction_time_fit),
+            jnp.asarray(basis_nested_freq_fit),
+            jnp.asarray(whitened_interaction["lam_time"]),
+            jnp.asarray(whitened_interaction["lam_freq"]),
+            jnp.asarray(whitened_interaction["joint_null"]),
+            jnp.asarray(null_nested_freq),
+            config,
+            interaction_scale_prior,
+            False,
+            likelihood_beta,
+            jnp.asarray(log_offset_fit),
+        )
+    else:
+        pls_init = initialize_with_penalized_least_squares(
+            init_power, B_time_fit, B_freq_fit, P_time, P_freq, config
+        )
+        init_sites = whitened_init_values(pls_init, whitened, config)
+        model = pspline_surface_model
+        model_args = (
+            jnp.asarray(power_fit),
+            jnp.asarray(counts_fit),
+            jnp.asarray(basis_eig_time_fit),
+            jnp.asarray(basis_eig_freq_fit),
+            jnp.asarray(whitened["lam_time"]),
+            jnp.asarray(whitened["lam_freq"]),
+            jnp.asarray(whitened["joint_null"]),
+            config,
+            False,  # never store the per-sample log_psd surface; reconstruct instead
+            likelihood_beta,
+            jnp.asarray(log_offset_fit),
+        )
     kernel = NUTS(
-        pspline_surface_model,
+        model,
         init_strategy=init_to_value(values=init_sites),
         max_tree_depth=max_tree_depth,
         target_accept_prob=target_accept_prob,
@@ -444,7 +710,7 @@ def fit_log_pspline_surface(
         from numpyro.infer.util import potential_energy as _potential_energy
 
         refreshed_pe, refreshed_grad = value_and_grad(
-            lambda z: _potential_energy(pspline_surface_model, model_args, {}, z)
+            lambda z: _potential_energy(model, model_args, {}, z)
         )(initial_state.z)
         mcmc.post_warmup_state = initial_state._replace(
             potential_energy=refreshed_pe, z_grad=refreshed_grad
@@ -457,15 +723,57 @@ def fit_log_pspline_surface(
     nuts_runtime_s = time.perf_counter() - nuts_t0
 
     samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
-    eig_samples = reconstruct_eig_coeff_samples(samples, whitened, config)
-    W_mean = whitened["U_time"] @ eig_samples.mean(axis=0) @ whitened["U_freq"].T
-    log_mean, log_lower, log_upper = surface_summaries(
-        eig_samples, basis_eig_time, basis_eig_freq,
-        precomputed=samples.get("log_psd"),
-    )
+    if nested:
+        n_interaction_time = whitened_interaction["lam_time"].size
+        n_nested_freq = whitened_interaction["lam_freq"].size
+        g_samples = samples["g"].reshape(-1, n_nested_freq)
+        h_samples = samples["h"].reshape(
+            -1, n_interaction_time, n_nested_freq
+        )
+        sigma_samples = samples["sigma_interaction"].reshape(-1)
+        log_mean_residual, log_lower_residual, log_upper_residual = (
+            nested_surface_summaries(
+                g_samples,
+                h_samples,
+                sigma_samples,
+                basis_interaction_time,
+                basis_nested_freq,
+            )
+        )
+        interaction_eig_last = h_samples[-1]
+        log_last_residual = (
+            basis_nested_freq @ g_samples[-1]
+        )[None, :] + (
+            basis_interaction_time
+            @ interaction_eig_last
+            @ basis_nested_freq.T
+        )
+        eig_samples = h_samples
+        W_mean = (
+            whitened_interaction["U_time"]
+            @ h_samples.mean(axis=0)
+            @ whitened_interaction["U_freq"].T
+        )
+    else:
+        eig_samples = reconstruct_eig_coeff_samples(samples, whitened, config)
+        W_mean = (
+            whitened["U_time"]
+            @ eig_samples.mean(axis=0)
+            @ whitened["U_freq"].T
+        )
+        log_mean_residual, log_lower_residual, log_upper_residual = surface_summaries(
+            eig_samples, basis_eig_time, basis_eig_freq,
+            precomputed=samples.get("log_psd"),
+        )
+        log_last_residual = (
+            basis_eig_time @ eig_samples[-1] @ basis_eig_freq.T
+        )
+    log_mean = validated_log_offset + log_mean_residual
+    log_lower = validated_log_offset + log_lower_residual
+    log_upper = validated_log_offset + log_upper_residual
     # The final retained draw is the exact conditional draw a blocked
     # signal/noise sampler must pass to its signal block (never the mean).
-    log_last = basis_eig_time @ eig_samples[-1] @ basis_eig_freq.T
+    log_last = validated_log_offset + log_last_residual
 
     fit_provenance = provenance(
         seed=random_seed,
@@ -494,11 +802,36 @@ def fit_log_pspline_surface(
         ),
         selector_metadata=binning_metadata,
     )
+    retained_cells = int(np.count_nonzero(validated_likelihood_mask))
+    total_cells = int(validated_likelihood_mask.size)
+    fit_provenance["likelihood_mask"] = {
+        "applied": bool(mask_applied),
+        "retained_cells": retained_cells,
+        "masked_cells": total_cells - retained_cells,
+        "masked_fraction": float(1.0 - retained_cells / total_cells),
+    }
+    fit_provenance["log_psd_offset"] = {
+        "applied": bool(offset_applied),
+        "shape": list(validated_log_offset.shape),
+    }
+    fit_provenance["residual_structure"] = {
+        "name": residual_structure,
+        "interaction_scale_prior": (
+            float(interaction_scale_prior) if nested else None
+        ),
+        "interaction_time_knots": int(interaction_time_knots) if nested else None,
+        "interaction_time_basis_size": (
+            int(B_time_interaction.shape[1]) if nested else None
+        ),
+        "interaction_zero_time_mean": bool(nested),
+    }
     return {
         "mcmc": mcmc,
         "config": config,
         "coeffs": coeffs,
         "power": power,
+        "likelihood_mask": validated_likelihood_mask,
+        "log_psd_offset": validated_log_offset,
         "time_grid": np.asarray(time_grid),
         "freq_grid": np.asarray(freq_grid),
         "knots_time": knots_time,
@@ -512,9 +845,16 @@ def fit_log_pspline_surface(
         "knot_allocation": spline["knot_allocation"],
         "B_time": B_time,
         "B_freq": B_freq,
-        "whitened": whitened,
+        "B_time_interaction": B_time_interaction if nested else None,
+        "basis_interaction_time": basis_interaction_time if nested else None,
+        "basis_nested_freq": basis_nested_freq if nested else None,
+        "whitened": whitened_interaction if nested else whitened,
         "samples": samples,
         "W_mean": W_mean,
+        "residual_structure": residual_structure,
+        "interaction_scale_samples": (
+            samples.get("sigma_interaction") if nested else None
+        ),
         "log_psd_mean": log_mean,
         "log_psd_lower": log_lower,
         "log_psd_upper": log_upper,
@@ -576,6 +916,7 @@ def _prepare_spline_bases(
     config: PSplineConfig,
     *,
     n_components: int,
+    likelihood_mask: np.ndarray | None = None,
     interior_knots_time: np.ndarray | None = None,
     interior_knots_freq: np.ndarray | None = None,
 ) -> dict[str, object]:
@@ -605,6 +946,7 @@ def _prepare_spline_bases(
                 time_grid,
                 freq_grid,
                 counts=float(n_components),
+                train_mask=likelihood_mask,
                 n_pilot_knots_time=max(8, config.n_interior_knots_time),
                 n_pilot_knots_freq=max(16, config.n_interior_knots_freq),
                 n_knots_time=config.n_interior_knots_time,
@@ -710,6 +1052,55 @@ def surface_summaries(
                           optimize=True)
         lower[:, j0:j0 + freq_chunk] = np.percentile(chunk, lower_pct, axis=0)
         upper[:, j0:j0 + freq_chunk] = np.percentile(chunk, upper_pct, axis=0)
+    return log_mean, lower, upper
+
+
+def nested_surface_summaries(
+    g_samples: np.ndarray,
+    h_samples: np.ndarray,
+    sigma_samples: np.ndarray,
+    basis_interaction_time: np.ndarray,
+    basis_eig_freq: np.ndarray,
+    *,
+    lower_pct: float = 5.0,
+    upper_pct: float = 95.0,
+    freq_chunk: int = 256,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Summarize ``g(f) + sigma*h(t,f)`` without storing full draw surfaces."""
+    g_samples = np.asarray(g_samples)
+    h_samples = np.asarray(h_samples)
+    sigma_samples = np.asarray(sigma_samples).reshape(-1)
+    stationary_mean = g_samples.mean(axis=0) @ basis_eig_freq.T
+    # h_samples are already drawn in the centered hierarchy with prior scale
+    # sigma_interaction; do not multiply by sigma a second time.
+    interaction_coefficients = h_samples
+    interaction_mean = (
+        basis_interaction_time
+        @ interaction_coefficients.mean(axis=0)
+        @ basis_eig_freq.T
+    )
+    log_mean = stationary_mean[None, :] + interaction_mean
+    n_t = basis_interaction_time.shape[0]
+    n_f = basis_eig_freq.shape[0]
+    lower = np.empty((n_t, n_f))
+    upper = np.empty((n_t, n_f))
+    for j0 in range(0, n_f, freq_chunk):
+        bf = basis_eig_freq[j0:j0 + freq_chunk]
+        stationary_chunk = g_samples @ bf.T
+        interaction_chunk = np.einsum(
+            "ta,nab,jb->ntj",
+            basis_interaction_time,
+            interaction_coefficients,
+            bf,
+            optimize=True,
+        )
+        chunk = stationary_chunk[:, None, :] + interaction_chunk
+        lower[:, j0:j0 + freq_chunk] = np.percentile(
+            chunk, lower_pct, axis=0
+        )
+        upper[:, j0:j0 + freq_chunk] = np.percentile(
+            chunk, upper_pct, axis=0
+        )
     return log_mean, lower, upper
 
 

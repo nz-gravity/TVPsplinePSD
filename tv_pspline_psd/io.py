@@ -80,6 +80,10 @@ def results_to_idata(
         "joint_null": (("eig_time", "eig_freq"), np.asarray(whitened["joint_null"])),
         "power": (("time", "freq"), np.asarray(results["power"])),
     }
+    if "likelihood_mask" in results:
+        const["likelihood_mask"] = (
+            ("time", "freq"), np.asarray(results["likelihood_mask"], dtype=bool)
+        )
     # New explicit-knot fits retain the historical normalized ``knots_freq``
     # for reconstruction compatibility and also persist the user-facing grid
     # coordinates. Older result dictionaries simply omit these optional vars.
@@ -192,7 +196,7 @@ def surface_from_idata(
         eig_samples, basis_eig_time, basis_eig_freq,
         lower_pct=lower_pct, upper_pct=upper_pct,
     )
-    return {
+    surface = {
         "time_grid": np.asarray(const["time_grid"].values),
         "freq_grid": np.asarray(const["freq_grid"].values),
         "log_psd_mean": log_mean,
@@ -203,6 +207,11 @@ def surface_from_idata(
         "psd_lower": np.exp(log_lower),
         "psd_upper": np.exp(log_upper),
     }
+    if "likelihood_mask" in const:
+        surface["likelihood_mask"] = np.asarray(
+            const["likelihood_mask"].values, dtype=bool
+        )
+    return surface
 
 
 def _dense_surface(const, config, whitened, eig_samples, n_time_dense, n_freq_dense):
