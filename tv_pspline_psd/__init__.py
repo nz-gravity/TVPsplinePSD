@@ -66,6 +66,11 @@ from .plotting import (  # noqa: E402
 from .provenance import provenance  # noqa: E402
 from .stationary import run_stationary_psd_mcmc  # noqa: E402
 from .stft import moving_stft, run_stft_mcmc, stft_white_noise_calibration  # noqa: E402
+from .wdm_projection import (  # noqa: E402
+    collapse_wdm_frequency_projection,
+    wdm_frequency_projection_grid,
+    wdm_frequency_quadrature,
+)
 
 __all__ = [
     "PSplineConfig",
@@ -90,6 +95,9 @@ __all__ = [
     "run_stft_mcmc",
     "moving_stft",
     "stft_white_noise_calibration",
+    "wdm_frequency_quadrature",
+    "wdm_frequency_projection_grid",
+    "collapse_wdm_frequency_projection",
     "evaluate_dense_posterior_mean",
     "save_run",
     "load_run",

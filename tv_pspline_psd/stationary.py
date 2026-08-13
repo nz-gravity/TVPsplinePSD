@@ -22,6 +22,8 @@ exactly the bias the non-stationary estimator avoids.
 
 from __future__ import annotations
 
+import time
+
 import jax.numpy as jnp
 import numpy as np
 import numpyro
@@ -211,10 +213,12 @@ def run_stationary_psd_mcmc(
         chain_method="sequential",
         progress_bar=progress_bar,
     )
+    nuts_started = time.perf_counter()
     mcmc.run(random.PRNGKey(random_seed),
              jnp.asarray(total_power), jnp.asarray(counts), jnp.asarray(basis_eig_freq_fit),
              jnp.asarray(lam_f), jnp.asarray(null_f), config,
              extra_fields=("diverging", "accept_prob", "num_steps", "potential_energy"))
+    nuts_runtime_s = time.perf_counter() - nuts_started
 
     samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
     # The sampled deterministic site lives on the binned likelihood grid.
@@ -243,12 +247,15 @@ def run_stationary_psd_mcmc(
         "mcmc": mcmc,
         "samples": samples,
         "freq_grid": np.asarray(freq_grid),
+        "basis_eig_freq": basis_eig_freq,
+        "eig_coeff_samples": eig_coefficients,
         "likelihood_mask": retained,
         "freq_bin_starts": starts,
         "likelihood_frequency_bins": int(active.sum()),
         "reference_applied": has_reference,
         "log_psd_offset": reference_log_psd if has_reference else None,
         "residual_log_psd_mean": residual_log_mean,
+        "residual_log_psd_samples": residual_log_psd,
         "residual_psd_geometric_mean": residual_psd_geometric_mean,
         # Backwards-compatible 1D aliases describe the stationary residual.
         # With no reference, the residual is the total stationary spectrum.
@@ -264,4 +271,5 @@ def run_stationary_psd_mcmc(
         "psd_lower_surface": psd_lower_surface,
         "psd_upper_surface": psd_upper_surface,
         "divergences": int(np.asarray(mcmc.get_extra_fields()["diverging"]).sum()),
+        "nuts_runtime_s": float(nuts_runtime_s),
     }

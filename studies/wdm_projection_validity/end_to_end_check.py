@@ -18,7 +18,7 @@ sys.path.insert(0, str(LDG))
 sys.path.insert(0, str(PKG))
 
 from run_aet_diagonal_pilot import analytic_aet_noise_psd
-from aet_diagonal import AET_CHANNELS
+from tv_pspline_psd.lisa_aet import AET_CHANNELS
 from tv_pspline_psd import PSplineConfig, wdm_analysis_coefficients
 
 ORBITS = LDG / "noise2a" / "orbits.h5"
