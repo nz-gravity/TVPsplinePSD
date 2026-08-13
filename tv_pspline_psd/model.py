@@ -221,6 +221,11 @@ def pspline_surface_model(
     ``R`` for the unbinned likelihood, or block-summed power and ``m * R`` for
     the coarse-grained one.
 
+    With a varying fixed reference ``S_i = R_i exp(r_b)`` and a residual
+    ``r_b`` approximated as constant inside the block, callers must instead
+    pass ``summed_power = sum_i(c_i**2 / R_i)``, ``log_psd_offset = 0``, and
+    the usual block count. The omitted ``sum_i log(R_i)`` is data-only.
+
     Args:
         summed_power: Per-cell (optionally time-block-summed) squared power
             ``sum_r c_r^2``, shape ``(n_time, n_freq)`` (``n_time`` is the

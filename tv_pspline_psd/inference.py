@@ -138,6 +138,41 @@ def bin_power_rectangular(
     return power_blocks, time_grid_blocks, freq_grid_blocks, counts_blocks
 
 
+def _reference_scaled_power(
+    power: np.ndarray,
+    log_psd_offset: np.ndarray,
+    likelihood_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    r"""Return the exact residual-likelihood power statistic ``power / R``.
+
+    For ``S_i = R_i exp(r_b)`` with a residual ``r_b`` approximated as constant
+    inside a coarse bin, the parameter-dependent quadratic term is
+
+    ``exp(-r_b) * sum_i(power_i / R_i)``.
+
+    The division must therefore happen at the original cell resolution before
+    powers are summed.  Pooling ``log(R)`` and dividing the summed power by the
+    resulting geometric-mean reference is not equivalent when ``R`` varies
+    within the bin.
+    """
+    power = np.asarray(power, dtype=float)
+    log_psd_offset = np.asarray(log_psd_offset, dtype=float)
+    if power.shape != log_psd_offset.shape:
+        raise ValueError("power and log_psd_offset must have matching shapes")
+    mask = _validate_likelihood_mask(likelihood_mask, power.shape)
+    # Mask before exponentiation so an excluded exact/near response zero cannot
+    # overflow despite having zero weight in the likelihood.
+    retained_power = np.where(mask, power, 0.0)
+    retained_log_offset = np.where(mask, log_psd_offset, 0.0)
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        scaled = retained_power * np.exp(-retained_log_offset)
+    if not np.all(np.isfinite(scaled)):
+        raise ValueError(
+            "reference-scaled power must be finite; check the reference PSD scale"
+        )
+    return scaled
+
+
 def _mean_power_for_masked_initialization(
     summed_power: np.ndarray,
     counts: np.ndarray,
@@ -519,8 +554,25 @@ def fit_log_pspline_surface(
         or freq_bin_starts is not None
     )
     if coarse_grained:
+        # If S_i = R_i exp(r_b), where the spline residual r_b is treated as
+        # constant within a coarse block, the exact parameter-dependent block
+        # likelihood is
+        #   -1/2 [N_b r_b + exp(-r_b) sum_i(power_i / R_i)].
+        # The data-only sum_i log(R_i) is omitted, consistently with the other
+        # Whittle constants.  In particular, do not average log(R) and reuse its
+        # geometric mean in the quadratic term: that is biased whenever the
+        # reference varies inside a bin (notably near moving response nulls).
+        power_for_fit = (
+            _reference_scaled_power(
+                power,
+                validated_log_offset,
+                validated_likelihood_mask if mask_applied else None,
+            )
+            if offset_applied
+            else power
+        )
         power_fit, time_grid_fit, freq_grid_fit, counts_fit = bin_power_rectangular(
-            power,
+            power_for_fit,
             time_grid,
             freq_grid,
             n_components,
@@ -542,32 +594,9 @@ def fit_log_pspline_surface(
         )
         basis_eig_time_fit = B_time_fit @ whitened["U_time"]
         basis_eig_freq_fit = B_freq_fit @ whitened["U_freq"]
-        offset_sum = np.add.reduceat(
-            np.where(validated_likelihood_mask, validated_log_offset, 0.0),
-            validated_time_starts if time_bin_starts is not None else _regular_bin_starts(time_grid.size, time_bin),
-            axis=0,
-        )
-        offset_sum = np.add.reduceat(
-            offset_sum,
-            validated_freq_starts if freq_bin_starts is not None else _regular_bin_starts(freq_grid.size, freq_bin),
-            axis=1,
-        )
-        offset_counts = np.add.reduceat(
-            validated_likelihood_mask.astype(int),
-            validated_time_starts if time_bin_starts is not None else _regular_bin_starts(time_grid.size, time_bin),
-            axis=0,
-        )
-        offset_counts = np.add.reduceat(
-            offset_counts,
-            validated_freq_starts if freq_bin_starts is not None else _regular_bin_starts(freq_grid.size, freq_bin),
-            axis=1,
-        )
-        log_offset_fit = np.divide(
-            offset_sum,
-            offset_counts,
-            out=np.zeros_like(offset_sum),
-            where=offset_counts > 0,
-        )
+        # The coarse model samples the residual log PSD.  The original
+        # full-resolution reference is added back only during reconstruction.
+        log_offset_fit = np.zeros_like(power_fit)
     else:
         if mask_applied:
             power_fit = np.where(validated_likelihood_mask, power, 0.0)
@@ -813,6 +842,16 @@ def fit_log_pspline_surface(
     fit_provenance["log_psd_offset"] = {
         "applied": bool(offset_applied),
         "shape": list(validated_log_offset.shape),
+        "coarse_likelihood_handling": (
+            "cellwise_power_divided_by_reference_before_block_sum"
+            if offset_applied and coarse_grained
+            else "cellwise_offset_on_likelihood_grid"
+            if offset_applied
+            else None
+        ),
+        "data_only_reference_log_determinant_omitted": bool(
+            offset_applied and coarse_grained
+        ),
     }
     fit_provenance["residual_structure"] = {
         "name": residual_structure,
