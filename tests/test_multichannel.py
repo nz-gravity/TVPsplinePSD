@@ -393,3 +393,36 @@ def test_component_noise_preconditioner_is_exact_and_conditions_both_blocks():
     scale = 1.0 / np.sqrt(np.diag(prior_whitened))
     cond_prior_only = np.linalg.cond(scale[:, None] * prior_whitened * scale[None, :])
     assert cond_prior_only > 100.0 * np.linalg.cond(transformed)
+
+
+def test_galactic_template_is_not_blanked_outside_the_mask():
+    """The returned surface must stay physical where the likelihood does not look.
+
+    Cells are excluded from the fit by zeroing their counts. Flooring the
+    Galactic template outside the mask as well leaves the returned surface
+    instrument-only at every held-out bin, which silently invalidates any
+    held-out score computed from it.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    shape = (3, 40, 30)
+    template = np.exp(rng.normal(-34.0, 3.0, shape))
+    cell_counts = rng.integers(0, 12, shape).astype(float)
+    supplied = rng.random(shape) > 0.3
+    retained = (cell_counts > 0.0) & supplied
+
+    positive = template[retained & (template > 0.0)]
+    floor = float(np.min(positive)) * 1.0e-6
+    template_fit = np.maximum(template, floor)
+
+    # Inside the mask the floor is the only modification, so the likelihood is
+    # untouched by the choice made outside it.
+    blanked = np.where(retained, np.maximum(template, floor), floor)
+    assert np.allclose(template_fit[retained], blanked[retained])
+
+    # Outside the mask the template must survive, not collapse to the floor.
+    outside = ~retained & (template > floor)
+    assert np.any(outside)
+    assert np.all(template_fit[outside] > floor)
+    assert np.median(template_fit[outside]) / np.median(blanked[outside]) > 1.0e6

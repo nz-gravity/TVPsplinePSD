@@ -631,9 +631,13 @@ def fit_aet_diagonal_nuts(
         if positive_template.size
         else np.finfo(float).tiny
     )
-    template_fit = np.where(
-        retained, np.maximum(scaled_template, template_floor), template_floor
-    )
+    # Floor only against log(0); do NOT blank the template outside `retained`.
+    # Cells are excluded from the likelihood by counts_fit above, so masking
+    # here changes nothing about the fit but replaces the Galactic template by
+    # ~1e-51 in the RETURNED surface at every held-out bin, making the model
+    # there instrument-only. That silently corrupts any held-out score. The
+    # noise reference is deliberately not masked either, for the same reason.
+    template_fit = np.maximum(scaled_template, template_floor)
 
     time_unit = (time - time[0]) / (time[-1] - time[0])
     log_frequency = np.log(frequency)
@@ -970,9 +974,13 @@ def fit_aet_component_noise_nuts(
         if positive_template.size
         else np.finfo(float).tiny
     )
-    template_fit = np.where(
-        retained, np.maximum(galactic_template, template_floor), template_floor
-    )
+    # Floor only against log(0); do NOT blank the template outside `retained`.
+    # Cells are excluded from the likelihood by counts_fit above, so masking
+    # here changes nothing about the fit but replaces the Galactic template by
+    # ~1e-51 in the RETURNED surface at every held-out bin, making the model
+    # there instrument-only. That silently corrupts any held-out score. The
+    # noise reference is deliberately not masked either, for the same reason.
+    template_fit = np.maximum(galactic_template, template_floor)
 
     # Log-spaced knots, as in Nazeela et al.
     log_frequency = np.log(frequency)
