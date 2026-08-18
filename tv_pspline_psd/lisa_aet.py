@@ -1,10 +1,13 @@
-"""Diagonal A/E/T helpers for the controlled independent-XYZ archive.
+"""A/E/T helpers for the TDI XYZ archive.
 
-The archive currently stores XYZ time series and diagonal XYZ PSD surfaces.
-The orthonormal rotation below is applied to the samples.  A diagonal PSD is
-rotated under the archive's explicit zero-XYZ-cross-spectrum simulation
-contract, i.e. ``diag(M diag(S_xyz) M.T)``.  This is appropriate for the toy
-archive but is not a replacement for a physical full-covariance response.
+``xyz_to_aet_series`` applies the orthonormal rotation to samples;
+``xyz_covariance_to_aet_diagonal`` rotates a full XYZ covariance and returns
+the A/E/T auto-PSDs.
+
+There is deliberately no helper that rotates XYZ *auto-PSDs* alone. Doing so
+assumes zero XYZ cross spectra, which no physical TDI response satisfies: the
+cross terms are what cancel in T. Rotating the diagonal put the Galactic
+foreground into T at ~1/3 of A instead of ~1e-4 of it. Rotate the covariance.
 """
 
 from __future__ import annotations
@@ -29,22 +32,6 @@ def xyz_to_aet_series(xyz: np.ndarray) -> np.ndarray:
     if values.ndim < 2 or values.shape[0] != 3:
         raise ValueError("xyz must have shape (3, ...)")
     return np.einsum("cx,x...->c...", XYZ_TO_AET, values, optimize=True)
-
-
-def diagonal_xyz_psd_to_aet(xyz_psd: np.ndarray) -> np.ndarray:
-    """Rotate diagonal XYZ PSDs to diagonal A/E/T PSDs.
-
-    This calculation assumes zero XYZ cross spectra.  It is exactly the
-    covariance contract used by the current independently drawn XYZ Galactic
-    realization, but it is only an approximation for a physical LISA
-    stochastic response or correlated instrumental noise.
-    """
-    values = np.asarray(xyz_psd, dtype=float)
-    if values.ndim < 2 or values.shape[0] != 3:
-        raise ValueError("xyz_psd must have shape (3, ...)")
-    if np.any(~np.isfinite(values)) or np.any(values < 0.0):
-        raise ValueError("xyz_psd must be finite and non-negative")
-    return np.einsum("cx,x...->c...", XYZ_TO_AET**2, values, optimize=True)
 
 
 def xyz_covariance_to_aet_diagonal(xyz_covariance: np.ndarray) -> np.ndarray:
@@ -75,7 +62,6 @@ def xyz_covariance_to_aet_diagonal(xyz_covariance: np.ndarray) -> np.ndarray:
 __all__ = [
     "AET_CHANNELS",
     "XYZ_TO_AET",
-    "diagonal_xyz_psd_to_aet",
     "xyz_covariance_to_aet_diagonal",
     "xyz_to_aet_series",
 ]
