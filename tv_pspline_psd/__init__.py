@@ -47,7 +47,9 @@ from .joint import (  # noqa: E402
 )
 from .metrics import (  # noqa: E402
     interval_coverage,
+    bias_log_psd,
     mse_log_psd,
+    rmse_log_psd,
     relative_surface_error,
 )
 from .moving_periodogram import (  # noqa: E402
@@ -106,7 +108,9 @@ __all__ = [
     "provenance",
     "summarize_mcmc_diagnostics",
     "relative_surface_error",
+    "bias_log_psd",
     "mse_log_psd",
+    "rmse_log_psd",
     "interval_coverage",
     "plot_surface_comparison",
     "plot_surface_knots",

@@ -322,6 +322,30 @@ def penalized_spline_prior_centre(
     return np.linalg.solve(normal, basis.T @ log_target)
 
 
+
+def _basis_low_frequency_weight(
+    basis: np.ndarray,
+    frequency_hz: np.ndarray,
+    anchor_fmax_hz: float,
+) -> np.ndarray:
+    """Per-basis-function weight for the low-frequency OMS anchor.
+
+    Returns the fraction of each B-spline's mass sitting below
+    ``anchor_fmax_hz``. A basis function wholly below the threshold gets 1
+    (fully anchored to the analytic shape), one wholly above gets 0 (free), and
+    the ones straddling it are tapered so the anchor does not introduce a step
+    into the fitted spectrum.
+    """
+    if anchor_fmax_hz <= 0.0:
+        return np.zeros(np.asarray(basis).shape[1])
+    basis = np.abs(np.asarray(basis, dtype=float))
+    below = np.asarray(frequency_hz, dtype=float) < anchor_fmax_hz
+    total = basis.sum(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        weight = np.where(total > 0.0, basis[below].sum(axis=0) / total, 0.0)
+    return weight
+
+
 def component_noise_model(
     summed_power,
     counts,
@@ -339,6 +363,8 @@ def component_noise_model(
     reference_f_knee_hz,
     t_leakage_log_centre=None,
     t_leakage_log_sd=2.0,
+    oms_anchor_fmax_hz=0.0,
+    oms_anchor_precision=1.0e8,
     gamma=1680.0,
 ):
     r"""Physical-component AET noise model with a parametric Galaxy.
@@ -399,12 +425,22 @@ def component_noise_model(
     # z carries a unit-normal reference measure; this factor replaces it with
     # the model's actual N(lam_loc, (phi P)^-1) prior on each block. The
     # Jacobian of the fixed linear map is constant and drops out.
+    # Below oms_anchor_fmax_hz the OMS component is 0.6-1.6 per cent of A and
+    # 0.8-4 per cent of T, so the data carry no information about S_OMS there
+    # and the (S_TM, S_OMS) split is unidentifiable (condition number ~1.4e3 at
+    # 0.13 mHz against ~30 by 0.42 mHz). Left free, the OMS spline runs away and
+    # the roughness penalty drags the total with it. This ridge pins the OMS
+    # offset to zero -- i.e. S_OMS to its analytic shape -- exactly where it is
+    # invisible, and vanishes where the data can see it. It removes the
+    # unconstrained direction rather than compensating for its symptoms.
+    oms_anchor = _basis_low_frequency_weight(basis, frequency_hz, oms_anchor_fmax_hz)
     numpyro.factor(
         "noise_spline_prior",
         -0.5
         * (
             phi_tm * (offset[:n_basis] @ (penalty @ offset[:n_basis]))
             + phi_oms * (offset[n_basis:] @ (penalty @ offset[n_basis:]))
+            + oms_anchor_precision * jnp.sum(oms_anchor * offset[n_basis:] ** 2)
         )
         + 0.5 * jnp.sum(z**2),
     )
@@ -892,6 +928,8 @@ def fit_aet_component_noise_nuts(
     n_frequency_knots: int = 12,
     phi_tm: float = 1.0e8,
     phi_oms: float = 1.0e4,
+    oms_anchor_fmax_hz: float = 0.0,
+    oms_anchor_precision: float = 1.0e8,
     fit_t_null_leakage: bool = True,
     t_leakage_centre: float = 3.0e-5,
     t_leakage_log_sd: float = 2.0,
@@ -1035,6 +1073,8 @@ def fit_aet_component_noise_nuts(
         reference_f_knee_hz,
         float(np.log(t_leakage_centre)) if fit_t_null_leakage else None,
         t_leakage_log_sd,
+        oms_anchor_fmax_hz,
+        oms_anchor_precision,
     )
     kernel = NUTS(
         component_noise_model,
