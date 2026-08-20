@@ -259,55 +259,35 @@ def component_noise_preconditioner(
     galactic_template: np.ndarray,
     counts: np.ndarray,
     penalty: np.ndarray,
-    phi_tm: float,
-    phi_oms: float,
+    phi_noise: float,
 ) -> np.ndarray:
-    """Return ``A`` mapping isotropic ``z`` to ``[lam_tm, lam_oms]`` offsets.
+    """Return ``A`` mapping isotropic ``z`` to the ``lam_a`` offset.
 
     Whitening against the prior ``phi P`` alone is the wrong target whenever
-    the likelihood dominates it, and here the two blocks sit on OPPOSITE sides
-    of that line: with the shipped defaults the Whittle Fisher is ~1.7e-4 of
-    the prior for TM (``phi_tm = 1e8`` pins it) but ~62x the prior for OMS
-    (``phi_oms = 1e4`` is deliberately loose). Prior-only whitening is
-    therefore right for one block and wrong for the other, leaving a
-    preconditioned condition number ~1.1e4 -- about 100 leapfrog steps per
-    iteration, tree depth 7, where 1 would do.
+    the likelihood dominates it, which it does here, so the metric includes the
+    Whittle Fisher as well. The recalibration ``a(f)`` multiplies the whole
+    analytic reference, so ``d log S_total / d log a`` is the noise fraction
+    and the metric is a single ``K x K`` block -- there is no TM/OMS cross term
+    and so no degenerate ridge to leave behind.
 
     Unlike ``coefficient_preconditioner``, the Fisher here is NOT parameter
-    independent: ``d log S_total / d lam_i = (S_i / S_total) b(f)`` depends on
-    the component fractions. It is evaluated once at the prior centre (the
+    independent: it depends on the noise fraction. It is evaluated once at the prior centre (the
     analytic spectra), which the fit only departs from by a few percent. That
     makes this an approximate metric rather than an exact one -- but it is
     still an exact change of coordinates, so the posterior is unchanged
     regardless of how good the approximation is.
     """
     n_basis = basis.shape[1]
-    fisher = np.zeros((2 * n_basis, 2 * n_basis))
+    fisher = np.zeros((n_basis, n_basis))
     for channel in range(transfer_tm.shape[0]):
         tm_part = transfer_tm[channel] * spectrum_tm[None, :]
         oms_part = transfer_oms[channel] * spectrum_oms[None, :]
         total = tm_part + oms_part + galactic_template[channel]
-        weight = counts[channel]
-        fraction_tm = tm_part / total
-        fraction_oms = oms_part / total
-        for first, second, row, column in (
-            (fraction_tm, fraction_tm, 0, 0),
-            (fraction_tm, fraction_oms, 0, n_basis),
-            (fraction_oms, fraction_oms, n_basis, n_basis),
-        ):
-            pooled = np.sum(weight * first * second, axis=0)
-            fisher[row:row + n_basis, column:column + n_basis] += 0.5 * (
-                basis.T @ (pooled[:, None] * basis)
-            )
-    fisher[n_basis:, :n_basis] = fisher[:n_basis, n_basis:].T
-
-    hessian = fisher.copy()
-    hessian[:n_basis, :n_basis] += phi_tm * penalty
-    hessian[n_basis:, n_basis:] += phi_oms * penalty
-    cholesky = np.linalg.cholesky(hessian)
-    return sla.solve_triangular(
-        cholesky.T, np.eye(2 * n_basis), lower=False
-    )
+        fraction = (tm_part + oms_part) / total
+        pooled = np.sum(counts[channel] * fraction * fraction, axis=0)
+        fisher += 0.5 * (basis.T @ (pooled[:, None] * basis))
+    cholesky = np.linalg.cholesky(fisher + phi_noise * penalty)
+    return sla.solve_triangular(cholesky.T, np.eye(n_basis), lower=False)
 
 
 def penalized_spline_prior_centre(
@@ -323,29 +303,6 @@ def penalized_spline_prior_centre(
 
 
 
-def _basis_low_frequency_weight(
-    basis: np.ndarray,
-    frequency_hz: np.ndarray,
-    anchor_fmax_hz: float,
-) -> np.ndarray:
-    """Per-basis-function weight for the low-frequency OMS anchor.
-
-    Returns the fraction of each B-spline's mass sitting below
-    ``anchor_fmax_hz``. A basis function wholly below the threshold gets 1
-    (fully anchored to the analytic shape), one wholly above gets 0 (free), and
-    the ones straddling it are tapered so the anchor does not introduce a step
-    into the fitted spectrum.
-    """
-    if anchor_fmax_hz <= 0.0:
-        return np.zeros(np.asarray(basis).shape[1])
-    basis = np.abs(np.asarray(basis, dtype=float))
-    below = np.asarray(frequency_hz, dtype=float) < anchor_fmax_hz
-    total = basis.sum(axis=0)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        weight = np.where(total > 0.0, basis[below].sum(axis=0) / total, 0.0)
-    return weight
-
-
 def component_noise_model(
     summed_power,
     counts,
@@ -356,15 +313,10 @@ def component_noise_model(
     lam_loc_oms,
     prior_cholesky_inverse,
     penalty,
-    phi_tm,
-    phi_oms,
+    phi_noise,
     galactic_template,
     frequency_hz,
     reference_f_knee_hz,
-    t_leakage_log_centre=None,
-    t_leakage_log_sd=2.0,
-    oms_anchor_fmax_hz=0.0,
-    oms_anchor_precision=1.0e8,
     gamma=1680.0,
 ):
     r"""Physical-component AET noise model with a parametric Galaxy.
@@ -387,21 +339,6 @@ def component_noise_model(
     noise/Galaxy degeneracy is broken by construction rather than by a
     roughness prior.
 
-    ``t_leakage_log_centre`` (if not None) adds one free parameter for
-    imperfect test-mass cancellation in the null channel::
-
-        S_noise,T = (T_TM,T + kappa T_TM,A) S_TM + T_OMS,T S_OMS
-
-    T is a near-null, sitting ~7000x below A, so its predicted level is a
-    small residual of large cancelling terms and a sub-percent modelling
-    error becomes an order-unity error there. Measured against the archive's
-    simulated noise, T carries ~10-23% more power than the analytic model
-    below 1 mHz, and the excess tracks T's own test-mass contribution
-    (excess/TM_T = 0.23, 0.19, 0.11 across the low bands, while the OMS- and
-    A-referenced ratios vary by orders of magnitude). Expressed as a fraction
-    of the A-channel test-mass response that fails to cancel, that is
-    kappa ~ 2e-5 to 5e-5. Fitting kappa keeps those cells in the likelihood
-    with their uncertainty propagated, rather than discarding them.
     """
     log_amplitude = numpyro.sample("log_amplitude", dist.Normal(0.0, 0.5))
     log_f_knee = numpyro.sample(
@@ -412,61 +349,27 @@ def component_noise_model(
     )
 
     n_basis = basis.shape[1]
-    # One joint z for both blocks: the TM/OMS cross term in the Fisher is not
-    # negligible, so whitening them separately would leave that correlation.
     z = numpyro.sample(
-        "z_noise", dist.Normal(0.0, 1.0).expand([2 * n_basis]).to_event(1)
+        "z_noise", dist.Normal(0.0, 1.0).expand([n_basis]).to_event(1)
     )
-    offset = prior_cholesky_inverse @ z
-    lam_tm = lam_loc_tm + offset[:n_basis]
-    lam_oms = lam_loc_oms + offset[n_basis:]
-    numpyro.deterministic("lam_tm", lam_tm)
-    numpyro.deterministic("lam_oms", lam_oms)
+    lam_a = prior_cholesky_inverse @ z
+    numpyro.deterministic("lam_a", lam_a)
     # z carries a unit-normal reference measure; this factor replaces it with
-    # the model's actual N(lam_loc, (phi P)^-1) prior on each block. The
-    # Jacobian of the fixed linear map is constant and drops out.
-    # Below oms_anchor_fmax_hz the OMS component is 0.6-1.6 per cent of A and
-    # 0.8-4 per cent of T, so the data carry no information about S_OMS there
-    # and the (S_TM, S_OMS) split is unidentifiable (condition number ~1.4e3 at
-    # 0.13 mHz against ~30 by 0.42 mHz). Left free, the OMS spline runs away and
-    # the roughness penalty drags the total with it. This ridge pins the OMS
-    # offset to zero -- i.e. S_OMS to its analytic shape -- exactly where it is
-    # invisible, and vanishes where the data can see it. It removes the
-    # unconstrained direction rather than compensating for its symptoms.
-    oms_anchor = _basis_low_frequency_weight(basis, frequency_hz, oms_anchor_fmax_hz)
+    # the model's actual N(0, (phi P)^-1) prior. The Jacobian of the fixed
+    # linear map is constant and drops out.
     numpyro.factor(
         "noise_spline_prior",
-        -0.5
-        * (
-            phi_tm * (offset[:n_basis] @ (penalty @ offset[:n_basis]))
-            + phi_oms * (offset[n_basis:] @ (penalty @ offset[n_basis:]))
-            + oms_anchor_precision * jnp.sum(oms_anchor * offset[n_basis:] ** 2)
-        )
-        + 0.5 * jnp.sum(z**2),
+        -0.5 * phi_noise * (lam_a @ (penalty @ lam_a)) + 0.5 * jnp.sum(z**2),
     )
 
-    spectrum_tm = jnp.exp(basis @ lam_tm)
-    spectrum_oms = jnp.exp(basis @ lam_oms)
-
-    t_index = AET_CHANNELS.index("T")
-    a_index = AET_CHANNELS.index("A")
-    if t_leakage_log_centre is not None:
-        # kappa(f) = kappa0 (f / 1 mHz)^slope. The measured residual drifts
-        # (kappa ~ 2e-5, 3.1e-5, 5.4e-5 at 0.2, 0.65, 2 mHz), so a single
-        # scalar corrects the mean offset but misfits the shape.
-        log_kappa0 = numpyro.sample(
-            "log_t_leakage", dist.Normal(t_leakage_log_centre, t_leakage_log_sd)
-        )
-        leakage_slope = numpyro.sample("t_leakage_slope", dist.Normal(0.43, 0.5))
-        kappa = jnp.exp(log_kappa0) * (frequency_hz / 1.0e-3) ** leakage_slope
+    recalibration = jnp.exp(basis @ lam_a)
+    spectrum_tm = jnp.exp(basis @ lam_loc_tm)
+    spectrum_oms = jnp.exp(basis @ lam_loc_oms)
 
     log_likelihood = 0.0
     for channel_index in range(len(AET_CHANNELS)):
-        tm_transfer = transfer_tm[channel_index]
-        if t_leakage_log_centre is not None and channel_index == t_index:
-            tm_transfer = tm_transfer + kappa[None, :] * transfer_tm[a_index]
-        noise = (
-            tm_transfer * spectrum_tm[None, :]
+        noise = recalibration[None, :] * (
+            transfer_tm[channel_index] * spectrum_tm[None, :]
             + transfer_oms[channel_index] * spectrum_oms[None, :]
         )
         log_galactic = (
@@ -490,8 +393,6 @@ def _diagnostics(mcmc: MCMC, max_tree_depth: int) -> dict[str, float | int]:
     tracked_sites = ["log_amplitude", "log_f_knee"]
     if "z_noise" in diagnostics:  # physical-component model
         tracked_sites.append("z_noise")
-        if "log_t_leakage" in diagnostics:
-            tracked_sites += ["log_t_leakage", "t_leakage_slope"]
     elif "z_shared" in diagnostics:
         tracked_sites.append("z_shared")
         tracked_sites += [f"delta_{channel_name}" for channel_name in AET_CHANNELS]
@@ -926,13 +827,8 @@ def fit_aet_component_noise_nuts(
     reference_f_knee_hz: float = 2.15e-3,
     mask: np.ndarray | None = None,
     n_frequency_knots: int = 12,
-    phi_tm: float = 1.0e8,
-    phi_oms: float = 1.0e4,
-    oms_anchor_fmax_hz: float = 0.0,
-    oms_anchor_precision: float = 1.0e8,
-    fit_t_null_leakage: bool = True,
-    t_leakage_centre: float = 3.0e-5,
-    t_leakage_log_sd: float = 2.0,
+    phi_noise: float = 1.0e4,
+
     n_warmup: int = 500,
     n_samples: int = 500,
     num_chains: int = 2,
@@ -956,7 +852,7 @@ def fit_aet_component_noise_nuts(
     instrument spectra that centre each spline's prior (Bayle & Hartwig
     instrument specifications), following Nazeela et al.
 
-    ``phi_tm`` defaults far tighter than ``phi_oms`` on purpose: the T channel
+    ``phi_noise`` sets the roughness penalty on ``a(f)``. The T channel
     is ~27x less sensitive to test-mass than to readout noise, so S_TM is the
     component that a low-frequency stochastic signal can imitate. Loosening
     ``phi_tm`` makes the model more agnostic at the cost of that degeneracy.
@@ -984,8 +880,8 @@ def fit_aet_component_noise_nuts(
         raise ValueError("frequency must be strictly increasing")
     if num_chains < 2:
         raise ValueError("AET posterior inference requires at least two chains")
-    if min(phi_tm, phi_oms) <= 0.0:
-        raise ValueError("phi_tm and phi_oms must be positive")
+    if phi_noise <= 0.0:
+        raise ValueError("phi_noise must be positive")
     retained = cell_counts > 0.0
     if mask is not None:
         retained &= np.asarray(mask, dtype=bool)
@@ -1044,18 +940,14 @@ def fit_aet_component_noise_nuts(
         template_fit,
         counts_fit,
         penalty,
-        phi_tm,
-        phi_oms,
+        phi_noise,
     )
 
     init_values = {
         "log_amplitude": np.asarray(0.0),
         "log_f_knee": np.asarray(np.log(reference_f_knee_hz)),
-        "z_noise": np.zeros(2 * basis.shape[1]),
+        "z_noise": np.zeros(basis.shape[1]),
     }
-    if fit_t_null_leakage:
-        init_values["log_t_leakage"] = np.asarray(np.log(t_leakage_centre))
-        init_values["t_leakage_slope"] = np.asarray(0.43)
     model_args = (
         jnp.asarray(summed_power),
         jnp.asarray(counts_fit),
@@ -1066,15 +958,10 @@ def fit_aet_component_noise_nuts(
         jnp.asarray(lam_loc_oms),
         jnp.asarray(prior_cholesky_inverse),
         jnp.asarray(penalty),
-        phi_tm,
-        phi_oms,
+        phi_noise,
         jnp.asarray(template_fit),
         jnp.asarray(frequency),
         reference_f_knee_hz,
-        float(np.log(t_leakage_centre)) if fit_t_null_leakage else None,
-        t_leakage_log_sd,
-        oms_anchor_fmax_hz,
-        oms_anchor_precision,
     )
     kernel = NUTS(
         component_noise_model,
@@ -1109,26 +996,16 @@ def fit_aet_component_noise_nuts(
             1680.0,
         )
     )
-    spectrum_tm = np.exp(samples["lam_tm"] @ basis.T)
-    spectrum_oms = np.exp(samples["lam_oms"] @ basis.T)
+    # a(f) scales the fixed analytic reference; the TM and OMS components keep
+    # their nominal shapes and are not separately inferred.
+    recalibration = np.exp(samples["lam_a"] @ basis.T)
+    spectrum_tm = np.exp(lam_loc_tm @ basis.T)[None, :] * recalibration
+    spectrum_oms = np.exp(lam_loc_oms @ basis.T)[None, :] * recalibration
 
-    t_index = AET_CHANNELS.index("T")
-    a_index = AET_CHANNELS.index("A")
-    kappa_draws = (
-        np.exp(samples["log_t_leakage"])[:, None]
-        * (frequency[None, :] / 1.0e-3) ** samples["t_leakage_slope"][:, None]
-        if fit_t_null_leakage
-        else None
-    )
     noise_by_channel, galactic_by_channel, total_by_channel = [], [], []
     for channel_index in range(len(AET_CHANNELS)):
-        tm_transfer = transfer_tm[channel_index][None, :, :]
-        if fit_t_null_leakage and channel_index == t_index:
-            tm_transfer = tm_transfer + (
-                kappa_draws[:, None, :] * transfer_tm[a_index][None, :, :]
-            )
         noise_draws = (
-            tm_transfer * spectrum_tm[:, None, :]
+            transfer_tm[channel_index][None, :, :] * spectrum_tm[:, None, :]
             + transfer_oms[channel_index][None, :, :] * spectrum_oms[:, None, :]
         )
         galactic_draws = (
@@ -1159,8 +1036,8 @@ def fit_aet_component_noise_nuts(
         samples=samples,
         mcmc=mcmc,
         runtime_seconds=runtime_seconds,
-        phi_time=float(phi_tm),
-        phi_frequency=float(phi_oms),
+        phi_time=float(phi_noise),
+        phi_frequency=float(phi_noise),
         noise_level_log_sd=float("nan"),
     )
 

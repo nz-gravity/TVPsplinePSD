@@ -304,8 +304,7 @@ def test_component_noise_recovers_a_known_galactic_amplitude():
         galactic_template_psd=template,
         reference_f_knee_hz=2.15e-3,
         n_frequency_knots=6,
-        phi_tm=1.0e4,
-        phi_oms=1.0e4,
+        phi_noise=1.0e4,
         num_chains=2,
         n_warmup=300,
         n_samples=300,
@@ -320,19 +319,19 @@ def test_component_noise_recovers_a_known_galactic_amplitude():
         assert np.all(np.isfinite(surface)) and np.all(surface > 0.0)
 
 
-def test_component_noise_preconditioner_is_exact_and_conditions_both_blocks():
-    """A must be a valid change of coordinates AND fix the block asymmetry.
+def test_component_noise_preconditioner_is_exact_and_whitens_the_metric():
+    """A must be a valid change of coordinates AND whiten the posterior.
 
-    TM is prior-pinned (phi_tm=1e8) while OMS is data-dominated (phi_oms=1e4),
-    so whitening against the prior alone is right for one block and wrong for
-    the other. The preconditioner must whiten against prior + likelihood.
+    The recalibration a(f) multiplies the whole analytic reference, so the
+    metric is a single K x K block built from prior + likelihood. Whitening
+    against the prior alone would be wrong wherever the likelihood dominates,
+    which it does here.
     """
     from tv_pspline_psd.multichannel import component_noise_preconditioner
     from tv_pspline_psd.splines import (
         create_bspline_basis,
         create_difference_penalty_matrix,
     )
-    import scipy.linalg as sla
 
     rng = np.random.default_rng(0)
     n_time, n_frequency, n_knots = 10, 300, 8
@@ -351,49 +350,30 @@ def test_component_noise_preconditioner_is_exact_and_conditions_both_blocks():
     transfer_oms = np.abs(rng.normal(1.0, 0.1, size=(3, n_time, n_frequency)))
     template = np.abs(rng.normal(0.5, 0.05, size=(3, n_time, n_frequency)))
     counts = np.full((3, n_time, n_frequency), 40.0)
-    phi_tm, phi_oms = 1.0e8, 1.0e4
+    phi_noise = 1.0e4
 
     a = component_noise_preconditioner(
         basis, transfer_tm, transfer_oms, spectrum_tm, spectrum_oms,
-        template, counts, penalty, phi_tm, phi_oms,
+        template, counts, penalty, phi_noise,
     )
-    assert a.shape == (2 * k, 2 * k)
+    assert a.shape == (k, k)
     # Invertible => a genuine change of coordinates, so the posterior is
     # unchanged whatever the metric's quality.
     assert np.isfinite(a).all()
     assert abs(np.linalg.det(a)) > 0
 
-    # It must whiten the posterior it was built from, to condition ~1.
-    fisher = np.zeros((2 * k, 2 * k))
+    fisher = np.zeros((k, k))
     for c in range(3):
         tm_part = transfer_tm[c] * spectrum_tm[None, :]
         oms_part = transfer_oms[c] * spectrum_oms[None, :]
         total = tm_part + oms_part + template[c]
-        for first, second, r, cc in (
-            (tm_part / total, tm_part / total, 0, 0),
-            (tm_part / total, oms_part / total, 0, k),
-            (oms_part / total, oms_part / total, k, k),
-        ):
-            pooled = np.sum(counts[c] * first * second, axis=0)
-            fisher[r:r + k, cc:cc + k] += 0.5 * (basis.T @ (pooled[:, None] * basis))
-    fisher[k:, :k] = fisher[:k, k:].T
-    hessian = fisher.copy()
-    hessian[:k, :k] += phi_tm * penalty
-    hessian[k:, k:] += phi_oms * penalty
+        fraction = (tm_part + oms_part) / total
+        pooled = np.sum(counts[c] * fraction * fraction, axis=0)
+        fisher += 0.5 * (basis.T @ (pooled[:, None] * basis))
+    hessian = fisher + phi_noise * penalty
 
     transformed = a.T @ hessian @ a
     assert np.linalg.cond(transformed) < 1.0 + 1e-6
-
-    # And it must beat prior-only whitening, which is the bug this fixes.
-    prior_only = np.zeros((2 * k, 2 * k))
-    chol_inv = sla.solve_triangular(np.linalg.cholesky(penalty).T, np.eye(k), lower=False)
-    prior_only[:k, :k] = chol_inv / np.sqrt(phi_tm)
-    prior_only[k:, k:] = chol_inv / np.sqrt(phi_oms)
-    prior_whitened = prior_only.T @ hessian @ prior_only
-    scale = 1.0 / np.sqrt(np.diag(prior_whitened))
-    cond_prior_only = np.linalg.cond(scale[:, None] * prior_whitened * scale[None, :])
-    assert cond_prior_only > 100.0 * np.linalg.cond(transformed)
-
 
 def test_galactic_template_is_not_blanked_outside_the_mask():
     """The returned surface must stay physical where the likelihood does not look.
