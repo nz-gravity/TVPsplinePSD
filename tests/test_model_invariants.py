@@ -18,10 +18,25 @@ from tv_pspline_psd.joint import (
 from tv_pspline_psd.model import (
     eigen_prior_scale,
     pspline_surface_model,
+    tensor_product_surface,
     whitened_init_values,
 )
 from tv_pspline_psd.moving_periodogram import _dynamic_whittle_model
 from tv_pspline_psd.stationary import _stationary_model
+
+
+def test_tensor_product_surface_matches_explicit_contraction() -> None:
+    rng = np.random.default_rng(123)
+    basis_time = rng.normal(size=(7, 3))
+    coefficients = rng.normal(size=(3, 5))
+    basis_freq = rng.normal(size=(11, 5))
+    expected = (basis_time @ coefficients) @ basis_freq.T
+    actual = tensor_product_surface(
+        jnp.asarray(basis_time),
+        jnp.asarray(coefficients),
+        jnp.asarray(basis_freq),
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
 
 
 def _trace(model, values, *args):

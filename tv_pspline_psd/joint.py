@@ -25,6 +25,7 @@ from .model import (
     initialize_with_penalized_least_squares,
     pspline_surface_model,
     sample_eigen_coefficients,
+    tensor_product_surface,
     whiten_penalty_pair,
     whitened_init_values,
 )
@@ -224,7 +225,9 @@ def _multichannel_joint_model(coeffs, templates, basis_eig_time, basis_eig_freq,
         eig_coeffs = sample_eigen_coefficients(
             f"s_{c}", scale, (n_t, n_f), config
         )
-        log_psd = basis_eig_time @ eig_coeffs @ basis_eig_freq.T
+        log_psd = tensor_product_surface(
+            basis_eig_time, eig_coeffs, basis_eig_freq
+        )
         signal = jnp.tensordot(beta, templates[c], axes=1)
         resid = coeffs[c] - signal
         total = total - 0.5 * jnp.sum(log_psd + resid**2 * jnp.exp(-log_psd))

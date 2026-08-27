@@ -26,6 +26,24 @@ import numpyro.distributions as dist
 from .config import PSplineConfig
 
 
+def tensor_product_surface(
+    basis_time: jnp.ndarray,
+    coefficients: jnp.ndarray,
+    basis_freq: jnp.ndarray,
+) -> jnp.ndarray:
+    """Evaluate ``B_t W B_f^T`` with an optimized contraction path.
+
+    The explicit left-associated form ``(B_t @ W) @ B_f.T`` is needlessly
+    expensive on production WDM grids, where the frequency grid is much wider
+    than either spline basis. Letting ``einsum`` choose the pairwise path
+    preserves the tensor-product model while allowing XLA to contract
+    ``W @ B_f.T`` first when that requires fewer operations.
+    """
+    return jnp.einsum(
+        "ti,ij,fj->tf", basis_time, coefficients, basis_freq, optimize="optimal"
+    )
+
+
 def power_floor(power: np.ndarray) -> float:
     """Scale-free floor for ``log(power + floor)`` targets.
 
@@ -253,7 +271,9 @@ def pspline_surface_model(
         config,
     )
 
-    log_psd_residual = basis_eig_time @ eig_coeffs @ basis_eig_freq.T
+    log_psd_residual = tensor_product_surface(
+        basis_eig_time, eig_coeffs, basis_eig_freq
+    )
     log_psd = (
         log_psd_residual
         if log_psd_offset is None
@@ -338,10 +358,8 @@ def nested_residual_surface_model(
         interaction_scale.shape,
         config,
     )
-    log_interaction = (
-        basis_interaction_time
-        @ h
-        @ basis_eig_freq.T
+    log_interaction = tensor_product_surface(
+        basis_interaction_time, h, basis_eig_freq
     )
     log_psd_residual = log_stationary[None, :] + log_interaction
     log_psd = (

@@ -45,6 +45,7 @@ import scipy.linalg as sla
 from tv_pspline_psd.config import PSplineConfig
 from tv_pspline_psd.model import (
     eigen_prior_scale,
+    tensor_product_surface,
     whiten_penalty_pair,
 )
 from tv_pspline_psd.splines import (
@@ -161,7 +162,9 @@ def _log_spline_surface(basis_eig_time, basis_eig_frequency, coefficients):
     of coefficients describe a spectral feature that translates in frequency.
     """
     if basis_eig_frequency.ndim == 2:
-        return basis_eig_time @ coefficients @ basis_eig_frequency.T
+        return tensor_product_surface(
+            basis_eig_time, coefficients, basis_eig_frequency
+        )
     return jnp.einsum(
         "ta,tfb,ab->tf", basis_eig_time, basis_eig_frequency, coefficients
     )
