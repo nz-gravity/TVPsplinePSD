@@ -1055,6 +1055,11 @@ def reconstruct_eig_coeff_samples(
     return s * scale
 
 
+def _summary_frequency_chunk(n_draws: int, n_time: int, requested: int) -> int:
+    """Bound a float64 draw surface to 128 MiB before percentile workspace."""
+    return max(1, min(requested, (128 * 1024**2) // max(1, n_draws*n_time*8)))
+
+
 def surface_summaries(
     eig_samples: np.ndarray,
     basis_eig_time: np.ndarray,
@@ -1080,6 +1085,7 @@ def surface_summaries(
 
     n_t = basis_eig_time.shape[0]
     n_f = basis_eig_freq.shape[0]
+    freq_chunk = _summary_frequency_chunk(len(eig_samples), n_t, freq_chunk)
     lower = np.empty((n_t, n_f))
     upper = np.empty((n_t, n_f))
     for j0 in range(0, n_f, freq_chunk):
@@ -1089,8 +1095,8 @@ def surface_summaries(
         # that scales catastrophically on large (time x freq) grids.
         chunk = np.einsum("ta,nab,jb->ntj", basis_eig_time, eig_samples, bf,
                           optimize=True)
-        lower[:, j0:j0 + freq_chunk] = np.percentile(chunk, lower_pct, axis=0)
-        upper[:, j0:j0 + freq_chunk] = np.percentile(chunk, upper_pct, axis=0)
+        lower[:, j0:j0 + freq_chunk], upper[:, j0:j0 + freq_chunk] = np.percentile(
+            chunk, [lower_pct, upper_pct], axis=0)
     return log_mean, lower, upper
 
 
@@ -1121,6 +1127,7 @@ def nested_surface_summaries(
     log_mean = stationary_mean[None, :] + interaction_mean
     n_t = basis_interaction_time.shape[0]
     n_f = basis_eig_freq.shape[0]
+    freq_chunk = _summary_frequency_chunk(len(g_samples), n_t, freq_chunk)
     lower = np.empty((n_t, n_f))
     upper = np.empty((n_t, n_f))
     for j0 in range(0, n_f, freq_chunk):
@@ -1134,12 +1141,8 @@ def nested_surface_summaries(
             optimize=True,
         )
         chunk = stationary_chunk[:, None, :] + interaction_chunk
-        lower[:, j0:j0 + freq_chunk] = np.percentile(
-            chunk, lower_pct, axis=0
-        )
-        upper[:, j0:j0 + freq_chunk] = np.percentile(
-            chunk, upper_pct, axis=0
-        )
+        lower[:, j0:j0 + freq_chunk], upper[:, j0:j0 + freq_chunk] = np.percentile(
+            chunk, [lower_pct, upper_pct], axis=0)
     return log_mean, lower, upper
 
 
