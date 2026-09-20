@@ -12,14 +12,20 @@ import h5py
 import numpy as np
 from scipy.ndimage import median_filter
 
-LDG = Path("/Users/avi/Documents/projects/wdm_psd/lisa_data_generation")
-PKG = Path("/Users/avi/Documents/projects/wdm_psd/wdm_psd")
+LDG = Path(__file__).resolve().parents[3] / "lisa_data_generation"
 sys.path.insert(0, str(LDG))
-sys.path.insert(0, str(PKG))
 
-from run_aet_diagonal_pilot import analytic_aet_noise_psd
-from tv_pspline_psd.lisa_aet import AET_CHANNELS
-from tv_pspline_psd import PSplineConfig, wdm_analysis_coefficients
+from run_aet_diagonal_pilot import (  # noqa: E402
+    analytic_aet_noise_psd,  # noqa: E402 - sibling study path must be configured first
+)
+
+from tv_pspline_psd import (  # noqa: E402 - sibling study path must be configured first
+    PSplineConfig,
+    wdm_analysis_coefficients,
+)
+from tv_pspline_psd.lisa_aet import (  # noqa: E402
+    AET_CHANNELS,  # noqa: E402 - sibling study path must be configured first
+)
 
 ORBITS = LDG / "noise2a" / "orbits.h5"
 ARCHIVE = LDG / "combined_esa_xyz.h5"

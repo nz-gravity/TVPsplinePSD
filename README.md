@@ -83,6 +83,20 @@ For a fuller example with diagnostics and a saved figure:
 uv run python examples/quickstart.py
 ```
 
+## Saved fits
+
+`save_run`, `load_run`, and `surface_from_idata` preserve posterior summaries
+on the analysis grid for both tensor and stationary-plus-interaction models,
+including fixed `log_psd_offset` surfaces and likelihood masks. Saved files
+record the residual model and a schema version alongside the compact posterior
+and reconstruction bases.
+
+Dense-grid evaluation currently supports tensor fits without a nonzero offset.
+For offset or stationary-plus-interaction fits, use the native-grid summaries.
+Older tensor files without offsets remain readable. An older file that records
+an applied offset but omits its values must be regenerated from the original
+fit: those missing values cannot be recovered from the saved posterior alone.
+
 ## Repository Layout
 
 | Path | Role |
@@ -92,6 +106,22 @@ uv run python examples/quickstart.py
 | `examples/` | Minimal runnable examples |
 | `studies/` | Reproducible LS2 and LISA study workflows; see [`studies/README.md`](studies/README.md) |
 | `notes/` | Design and validation notes |
+
+## Inference internals
+
+`fit_log_pspline_surface` in `inference.py` coordinates the fit and assembles
+its results. The numerical stages live in focused modules:
+
+- `binning.py`: partition selection, masks, summed power and exact cell counts.
+- `_surface_setup.py`: input validation, knot/basis construction and likelihood
+  grid preparation. Small dataclasses carry prepared arrays between stages.
+- `_surface_sampling.py`: warm-start initialization, model arguments and NUTS
+  execution, including refreshing continued chains for changed residual data.
+- `posterior.py`: coefficient reconstruction and memory-bounded surface
+  summaries, including the final conditional draw.
+
+Existing imports of binning and posterior helpers from `inference.py` remain
+available. Model priors, fit arguments and result dictionary keys are unchanged.
 
 ## Generated artifacts
 

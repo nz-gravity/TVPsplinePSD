@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import numpy as np
 
-
 AET_CHANNELS = ("A", "E", "T")
 XYZ_TO_AET = np.asarray(
     [

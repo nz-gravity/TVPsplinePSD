@@ -17,7 +17,6 @@ from numpyro.infer import MCMC, NUTS, init_to_value
 from .galactic import log_galactic_psd_jax, simulation_parameters
 from .multichannel import AETDiagonalPosterior
 
-
 PARAMETER_NAMES = ("amplitude", "f1_hz", "f2_hz", "f_knee_hz", "alpha")
 
 

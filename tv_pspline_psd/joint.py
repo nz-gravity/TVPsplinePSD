@@ -18,9 +18,8 @@ from jax import random
 from numpyro.infer import MCMC, NUTS, init_to_value
 
 from .config import PSplineConfig
-from .inference import reconstruct_eig_coeff_samples, surface_summaries
 from .model import (
-    _sample_log_gamma,
+    _sample_smoothing_precision,
     eigen_prior_scale,
     initialize_with_penalized_least_squares,
     pspline_surface_model,
@@ -29,6 +28,7 @@ from .model import (
     whiten_penalty_pair,
     whitened_init_values,
 )
+from .posterior import reconstruct_eig_coeff_samples, surface_summaries
 from .splines import (
     create_bspline_basis,
     create_bspline_roughness_penalty,
@@ -211,14 +211,8 @@ def _multichannel_joint_model(coeffs, templates, basis_eig_time, basis_eig_freq,
 
     total = 0.0
     for c in range(n_channels):
-        phi_time = _sample_log_gamma(
-            f"phi_time_{c}", config.alpha_phi, config.beta_phi,
-            config.phi_log_base_scale,
-        )
-        phi_freq = _sample_log_gamma(
-            f"phi_freq_{c}", config.alpha_phi, config.beta_phi,
-            config.phi_log_base_scale,
-        )
+        phi_time = _sample_smoothing_precision(f"phi_time_{c}", config)
+        phi_freq = _sample_smoothing_precision(f"phi_freq_{c}", config)
         scale = eigen_prior_scale(
             phi_time, phi_freq, lam_time, lam_freq, joint_null, config
         )

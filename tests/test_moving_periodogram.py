@@ -15,7 +15,6 @@ from tv_pspline_psd.moving_periodogram import (
     tang_moving_periodogram,
 )
 
-
 # ---------------------------------------------------------------------------
 # Paper-faithful oracle.
 #
@@ -145,7 +144,7 @@ def test_documented_boundary_deviations_from_tang_definition_3() -> None:
         # Deviation 1: retained centres are exactly Tang's (l, j) grid plus m.
         n_blocks = (T - 2 * m) // (thin * m)
         expected_t = np.asarray(
-            [m + thin * l * m + j for l in range(n_blocks) for j in range(1, m + 1)]
+            [m + thin * block * m + j for block in range(n_blocks) for j in range(1, m + 1)]
         )
         np.testing.assert_array_equal(t_all, expected_t)
 

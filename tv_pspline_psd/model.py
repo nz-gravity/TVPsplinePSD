@@ -109,6 +109,27 @@ def _sample_log_gamma(
     return phi
 
 
+def _sample_smoothing_precision(name: str, config: PSplineConfig) -> jnp.ndarray:
+    """Sample log precision with the configured, correctly transformed prior.
+
+    Sites retain their historical names and contain log(phi). For half-Normal
+    roughness, |d sigma / d log(phi)| = sigma / 2. The reference Normal is
+    cancelled exactly, as in the Gamma implementation above.
+    """
+    if config.smoothing_prior == "gamma":
+        return _sample_log_gamma(
+            name, config.alpha_phi, config.beta_phi, config.phi_log_base_scale
+        )
+    base = dist.Normal(0.0, config.phi_log_base_scale)
+    log_phi = numpyro.sample(name, base)
+    sigma = jnp.exp(-0.5 * log_phi)
+    target = dist.HalfNormal(config.roughness_scale).log_prob(sigma)
+    numpyro.factor(
+        f"{name}_prior", target - 0.5 * log_phi - jnp.log(2.0) - base.log_prob(log_phi)
+    )
+    return jnp.exp(log_phi)
+
+
 def eigen_prior_scale(
     phi_time: jnp.ndarray,
     phi_freq: jnp.ndarray,
@@ -175,12 +196,8 @@ def sample_tensor_eigen_coefficients(
     """
     n_basis_time = basis_eig_time.shape[1]
     n_basis_freq = basis_eig_freq.shape[1]
-    phi_time = _sample_log_gamma(
-        "phi_time", config.alpha_phi, config.beta_phi, config.phi_log_base_scale
-    )
-    phi_freq = _sample_log_gamma(
-        "phi_freq", config.alpha_phi, config.beta_phi, config.phi_log_base_scale
-    )
+    phi_time = _sample_smoothing_precision("phi_time", config)
+    phi_freq = _sample_smoothing_precision("phi_freq", config)
     scale = eigen_prior_scale(
         phi_time, phi_freq, lam_time, lam_freq, joint_null, config
     )
@@ -322,12 +339,7 @@ def nested_residual_surface_model(
     if not config.centered:
         raise ValueError("nested residual inference currently requires centered=True")
 
-    phi_stationary = _sample_log_gamma(
-        "phi_stationary",
-        config.alpha_phi,
-        config.beta_phi,
-        config.phi_log_base_scale,
-    )
+    phi_stationary = _sample_smoothing_precision("phi_stationary", config)
     stationary_scale = jnp.where(
         null_freq,
         1.0 / jnp.sqrt(config.null_precision),

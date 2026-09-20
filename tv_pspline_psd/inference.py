@@ -9,326 +9,42 @@ one real coefficient (``R = 1``); an STFT cell carries two (real and imaginary).
 
 from __future__ import annotations
 
-import time
 from typing import Any, Mapping
 
-import jax.numpy as jnp
 import numpy as np
-from jax import random
-from numpyro.infer import MCMC, NUTS, init_to_value
 from wdm_transform import TimeSeries
 
-from .adaptive_knots import fit_adaptive_knots
+from ._surface_sampling import prepare_surface_model, run_surface_nuts
+from ._surface_setup import (  # noqa: F401 - retain historical inference imports
+    _prepare_spline_bases,
+    _validate_explicit_interior_knots,
+    prepare_likelihood_grid,
+    prepare_surface_basis,
+    validate_surface_inputs,
+)
+from .binning import (  # noqa: F401 - retain historical inference imports
+    _mean_power_for_masked_initialization,
+    _reference_scaled_power,
+    _regular_bin_starts,
+    _validate_bin_starts,
+    _validate_likelihood_mask,
+    adaptive_frequency_bin_starts,
+    bin_power_rectangular,
+    bin_power_time_axis,
+    gap_aware_time_bin_starts,
+)
 from .config import PSplineConfig
-from .model import (
-    initialize_with_penalized_least_squares,
-    nested_residual_surface_model,
-    power_floor,
-    pspline_surface_model,
-    whiten_penalty_pair,
-    whitened_init_values,
+from .posterior import (  # noqa: F401 - retain historical inference imports
+    _summary_frequency_chunk,
+    nested_surface_summaries,
+    reconstruct_eig_coeff_samples,
+    summarize_surface_samples,
+    surface_summaries,
 )
 from .provenance import binning_provenance, provenance
 from .splines import (
-    create_bspline_basis,
-    create_bspline_roughness_penalty,
     evaluate_bspline_basis,
 )
-
-
-def _regular_bin_starts(size: int, bin_size: int) -> np.ndarray:
-    return np.arange(0, size, bin_size, dtype=int)
-
-
-def _validate_bin_starts(
-    starts: np.ndarray | None,
-    size: int,
-    bin_size: int,
-    *,
-    axis: str,
-) -> np.ndarray:
-    if not isinstance(bin_size, (int, np.integer)) or isinstance(bin_size, bool) or bin_size < 1:
-        raise ValueError(f"{axis}_bin must be a positive integer.")
-    if starts is None:
-        return _regular_bin_starts(size, int(bin_size))
-    if bin_size != 1:
-        raise ValueError(f"{axis}_bin must be 1 when {axis}_bin_starts is provided.")
-    starts = np.asarray(starts)
-    if starts.ndim != 1 or starts.size == 0:
-        raise ValueError(f"{axis}_bin_starts must be a non-empty one-dimensional array.")
-    if not np.issubdtype(starts.dtype, np.integer):
-        raise ValueError(f"{axis}_bin_starts must contain integer indices.")
-    starts = starts.astype(int, copy=False)
-    if starts[0] != 0 or starts[-1] >= size or np.any(np.diff(starts) <= 0):
-        raise ValueError(
-            f"{axis}_bin_starts must begin at 0 and contain strictly increasing "
-            f"indices smaller than the {axis} grid size ({size})."
-        )
-    return starts
-
-
-def _validate_likelihood_mask(
-    likelihood_mask: np.ndarray | None,
-    shape: tuple[int, int],
-) -> np.ndarray:
-    """Return a boolean per-cell likelihood mask on the analysis grid."""
-    if likelihood_mask is None:
-        return np.ones(shape, dtype=bool)
-    mask = np.asarray(likelihood_mask)
-    if mask.shape != shape:
-        raise ValueError(
-            "likelihood_mask must match the (time, frequency) analysis grid: "
-            f"expected {shape}, got {mask.shape}."
-        )
-    if mask.dtype != np.bool_:
-        raise ValueError("likelihood_mask must contain boolean values.")
-    if not np.any(mask):
-        raise ValueError("likelihood_mask must retain at least one analysis cell.")
-    return mask
-
-
-def bin_power_rectangular(
-    power: np.ndarray,
-    time_grid: np.ndarray,
-    freq_grid: np.ndarray,
-    n_components: int,
-    *,
-    time_bin: int = 1,
-    freq_bin: int = 1,
-    time_bin_starts: np.ndarray | None = None,
-    freq_bin_starts: np.ndarray | None = None,
-    likelihood_mask: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Sum powers over a separable rectangular time--frequency partition.
-
-    ``*_bin_starts`` are optional zero-based starts for variable-width bins.
-    Keeping the partition separable preserves the fast tensor evaluation
-    ``B_t W B_f.T`` on the reduced likelihood grid.
-    """
-    power = np.asarray(power)
-    time_grid = np.asarray(time_grid)
-    freq_grid = np.asarray(freq_grid)
-    if power.shape != (time_grid.size, freq_grid.size):
-        raise ValueError("power shape must match time_grid and freq_grid.")
-    if not isinstance(n_components, (int, np.integer)) or n_components < 1:
-        raise ValueError("n_components must be a positive integer.")
-    mask = _validate_likelihood_mask(likelihood_mask, power.shape)
-
-    time_starts = _validate_bin_starts(
-        time_bin_starts, time_grid.size, time_bin, axis="time"
-    )
-    freq_starts = _validate_bin_starts(
-        freq_bin_starts, freq_grid.size, freq_bin, axis="freq"
-    )
-    time_sizes = np.diff(np.r_[time_starts, time_grid.size])
-    freq_sizes = np.diff(np.r_[freq_starts, freq_grid.size])
-
-    power_blocks = np.add.reduceat(np.where(mask, power, 0.0), time_starts, axis=0)
-    power_blocks = np.add.reduceat(power_blocks, freq_starts, axis=1)
-    time_grid_blocks = np.add.reduceat(time_grid, time_starts) / time_sizes
-    freq_grid_blocks = np.add.reduceat(freq_grid, freq_starts) / freq_sizes
-    if likelihood_mask is None:
-        counts_blocks = (
-            int(n_components) * time_sizes[:, None] * freq_sizes[None, :]
-        )
-    else:
-        counts_blocks = np.add.reduceat(mask.astype(int), time_starts, axis=0)
-        counts_blocks = np.add.reduceat(counts_blocks, freq_starts, axis=1)
-        counts_blocks *= int(n_components)
-    return power_blocks, time_grid_blocks, freq_grid_blocks, counts_blocks
-
-
-def _reference_scaled_power(
-    power: np.ndarray,
-    log_psd_offset: np.ndarray,
-    likelihood_mask: np.ndarray | None = None,
-) -> np.ndarray:
-    r"""Return the exact residual-likelihood power statistic ``power / R``.
-
-    For ``S_i = R_i exp(r_b)`` with a residual ``r_b`` approximated as constant
-    inside a coarse bin, the parameter-dependent quadratic term is
-
-    ``exp(-r_b) * sum_i(power_i / R_i)``.
-
-    The division must therefore happen at the original cell resolution before
-    powers are summed.  Pooling ``log(R)`` and dividing the summed power by the
-    resulting geometric-mean reference is not equivalent when ``R`` varies
-    within the bin.
-    """
-    power = np.asarray(power, dtype=float)
-    log_psd_offset = np.asarray(log_psd_offset, dtype=float)
-    if power.shape != log_psd_offset.shape:
-        raise ValueError("power and log_psd_offset must have matching shapes")
-    mask = _validate_likelihood_mask(likelihood_mask, power.shape)
-    # Mask before exponentiation so an excluded exact/near response zero cannot
-    # overflow despite having zero weight in the likelihood.
-    retained_power = np.where(mask, power, 0.0)
-    retained_log_offset = np.where(mask, log_psd_offset, 0.0)
-    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-        scaled = retained_power * np.exp(-retained_log_offset)
-    if not np.all(np.isfinite(scaled)):
-        raise ValueError(
-            "reference-scaled power must be finite; check the reference PSD scale"
-        )
-    return scaled
-
-
-def _mean_power_for_masked_initialization(
-    summed_power: np.ndarray,
-    counts: np.ndarray,
-) -> np.ndarray:
-    """Fill masked cells for initialization without changing the target.
-
-    Retained cells use their per-component mean power. Missing cells are filled
-    by log-linear frequency interpolation within each likelihood row. A fully
-    masked row receives the global retained-cell median. These values seed NUTS
-    only; masked cells still have zero power and zero count in the likelihood.
-    """
-    summed_power = np.asarray(summed_power, dtype=float)
-    counts = np.broadcast_to(np.asarray(counts, dtype=float), summed_power.shape)
-    valid = (counts > 0.0) & (summed_power > 0.0)
-    retained = summed_power[valid] / counts[valid]
-    global_fill = float(np.median(retained)) if retained.size else 1.0
-    output = np.empty_like(summed_power)
-    frequency_index = np.arange(summed_power.shape[1], dtype=float)
-    for row in range(summed_power.shape[0]):
-        row_valid = valid[row]
-        if np.any(row_valid):
-            locations = frequency_index[row_valid]
-            values = np.log(summed_power[row, row_valid] / counts[row, row_valid])
-            output[row] = np.exp(np.interp(frequency_index, locations, values))
-        else:
-            output[row] = global_fill
-    return output
-
-
-def adaptive_frequency_bin_starts(
-    pilot_log_psd: np.ndarray,
-    *,
-    max_log_range: float = 0.15,
-    max_bin: int = 32,
-) -> np.ndarray:
-    """Greedily choose shared frequency bins from a pilot log-PSD surface.
-
-    A proposed bin is extended while its log-PSD range is no larger than
-    ``max_log_range`` at every pilot time and its width is below ``max_bin``.
-    Sharp features therefore retain fine channels, while smooth regions use
-    wider bins. The returned starts define a common nonuniform frequency grid,
-    preserving tensor-product likelihood evaluation.
-    """
-    pilot = np.asarray(pilot_log_psd, dtype=float)
-    if pilot.ndim != 2 or pilot.shape[0] == 0 or pilot.shape[1] == 0:
-        raise ValueError("pilot_log_psd must be a non-empty (time, frequency) array.")
-    if not np.isfinite(pilot).all():
-        raise ValueError("pilot_log_psd must contain only finite values.")
-    if not np.isfinite(max_log_range) or max_log_range <= 0:
-        raise ValueError("max_log_range must be finite and positive.")
-    if not isinstance(max_bin, (int, np.integer)) or isinstance(max_bin, bool) or max_bin < 1:
-        raise ValueError("max_bin must be a positive integer.")
-
-    starts = [0]
-    start = 0
-    low = pilot[:, 0].copy()
-    high = low.copy()
-    for j in range(1, pilot.shape[1]):
-        candidate_low = np.minimum(low, pilot[:, j])
-        candidate_high = np.maximum(high, pilot[:, j])
-        too_wide = j - start >= max_bin
-        too_variable = float(np.max(candidate_high - candidate_low)) > max_log_range
-        if too_wide or too_variable:
-            starts.append(j)
-            start = j
-            low = pilot[:, j].copy()
-            high = low.copy()
-        else:
-            low = candidate_low
-            high = candidate_high
-    return np.asarray(starts, dtype=int)
-
-
-def gap_aware_time_bin_starts(
-    time_grid: np.ndarray,
-    time_bin: int,
-    *,
-    max_gap: float | None = None,
-    gap_factor: float = 1.5,
-) -> np.ndarray:
-    """Return uniform-width time-bin starts without crossing missing intervals.
-
-    Consecutive retained rows are not necessarily consecutive in physical time:
-    after rows affected by a data gap are removed, blindly grouping array rows
-    can join cells on opposite sides of that gap.  This helper splits the grid
-    into contiguous runs first, then partitions each run independently.  Ragged
-    bins are therefore allowed immediately before every gap and at the end.
-
-    If ``max_gap`` is omitted, a break is any step larger than
-    ``gap_factor * median(diff(time_grid))``.  Supplying ``max_gap`` is useful
-    when the nominal cadence is known exactly.
-    """
-    time_grid = np.asarray(time_grid, dtype=float)
-    if time_grid.ndim != 1 or time_grid.size == 0:
-        raise ValueError("time_grid must be a non-empty one-dimensional array.")
-    if not np.isfinite(time_grid).all() or np.any(np.diff(time_grid) <= 0):
-        raise ValueError("time_grid must be finite and strictly increasing.")
-    if (
-        not isinstance(time_bin, (int, np.integer))
-        or isinstance(time_bin, bool)
-        or time_bin < 1
-    ):
-        raise ValueError("time_bin must be a positive integer.")
-    if time_grid.size == 1:
-        return np.array([0], dtype=int)
-
-    steps = np.diff(time_grid)
-    if max_gap is None:
-        if not np.isfinite(gap_factor) or gap_factor <= 1.0:
-            raise ValueError("gap_factor must be finite and larger than 1.")
-        max_gap = float(gap_factor * np.median(steps))
-    elif not np.isfinite(max_gap) or max_gap <= 0:
-        raise ValueError("max_gap must be finite and positive.")
-
-    breaks = np.flatnonzero(steps > max_gap) + 1
-    run_starts = np.r_[0, breaks]
-    run_stops = np.r_[breaks, time_grid.size]
-    starts = [
-        start
-        for run_start, run_stop in zip(run_starts, run_stops)
-        for start in range(int(run_start), int(run_stop), int(time_bin))
-    ]
-    return np.asarray(starts, dtype=int)
-
-
-def bin_power_time_axis(
-    power: np.ndarray,
-    time_grid: np.ndarray,
-    time_bin: int,
-    n_components: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Block-sum power/time along the time axis for likelihood coarse-graining.
-
-    The last block is ragged when ``time_grid.size`` is not a multiple of
-    ``time_bin``. Block time coordinates are the block mean of ``time_grid``.
-
-    Args:
-        power: Summed squared power per cell, shape ``(n_time, n_freq)``.
-        time_grid: Time coordinates, shape ``(n_time,)``.
-        time_bin: Number of consecutive time bins per block (``>= 1``).
-        n_components: Real components per cell (``R``), used to scale counts.
-
-    Returns:
-        ``(power_blocks, time_grid_blocks, counts_blocks)`` with
-        ``power_blocks``/``time_grid_blocks`` shape ``(n_blocks, ...)`` and
-        ``counts_blocks`` shape ``(n_blocks, 1)`` (``= block_size * R``,
-        summing to ``R * n_time`` over all blocks).
-    """
-    power_blocks, time_grid_blocks, _, counts_blocks = bin_power_rectangular(
-        power,
-        time_grid,
-        np.arange(power.shape[1], dtype=float),
-        n_components,
-        time_bin=time_bin,
-    )
-    return power_blocks, time_grid_blocks, counts_blocks[:, :1]
 
 
 def fit_log_pspline_surface(
@@ -434,44 +150,16 @@ def fit_log_pspline_surface(
         A results dict with the posterior PSD surface and summaries, including
         the ``nuts_runtime_s`` wall-clock time.
     """
-    coeffs = np.asarray(coeffs, dtype=float)
-    time_grid = np.asarray(time_grid, dtype=float)
-    freq_grid = np.asarray(freq_grid, dtype=float)
-    if coeffs.ndim != 3:
-        raise ValueError("coeffs must have shape (R, n_time, n_freq).")
-    if coeffs.shape[0] == 0 or coeffs.shape[1] == 0 or coeffs.shape[2] == 0:
-        raise ValueError("coeffs and the analysis grid must be non-empty after trimming.")
-    if time_grid.ndim != 1 or freq_grid.ndim != 1:
-        raise ValueError("time_grid and freq_grid must be one-dimensional.")
-    if coeffs.shape[1] != time_grid.size or coeffs.shape[2] != freq_grid.size:
-        raise ValueError(
-            "coeffs shape must match time_grid and freq_grid: expected "
-            f"(*, {time_grid.size}, {freq_grid.size}), got {coeffs.shape}."
-        )
-    if not np.isfinite(coeffs).all():
-        raise ValueError("coeffs must contain only finite values.")
-    if not np.isfinite(time_grid).all() or not np.isfinite(freq_grid).all():
-        raise ValueError("time_grid and freq_grid must contain only finite values.")
-    if np.any(np.diff(time_grid) <= 0) or np.any(np.diff(freq_grid) <= 0):
-        raise ValueError("time_grid and freq_grid must be strictly increasing.")
-    if not 0.0 <= likelihood_beta <= 1.0:
-        raise ValueError("likelihood_beta must lie in [0, 1].")
-    if residual_structure not in {"tensor", "stationary_plus_interaction"}:
-        raise ValueError(
-            "residual_structure must be 'tensor' or 'stationary_plus_interaction'"
-        )
-    if not np.isfinite(interaction_scale_prior) or interaction_scale_prior <= 0.0:
-        raise ValueError("interaction_scale_prior must be finite and positive")
-    if (
-        not isinstance(interaction_time_knots, (int, np.integer))
-        or isinstance(interaction_time_knots, bool)
-        or interaction_time_knots < 0
-    ):
-        raise ValueError("interaction_time_knots must be a non-negative integer")
-    if residual_structure == "stationary_plus_interaction" and not config.centered:
-        raise ValueError(
-            "stationary_plus_interaction currently requires config.centered=True"
-        )
+    coeffs, time_grid, freq_grid = validate_surface_inputs(
+        coeffs,
+        time_grid,
+        freq_grid,
+        config,
+        likelihood_beta=likelihood_beta,
+        residual_structure=residual_structure,
+        interaction_scale_prior=interaction_scale_prior,
+        interaction_time_knots=interaction_time_knots,
+    )
     validated_time_starts = _validate_bin_starts(
         time_bin_starts, time_grid.size, time_bin, axis="time"
     )
@@ -480,9 +168,7 @@ def fit_log_pspline_surface(
     )
     power = np.sum(coeffs**2, axis=0)  # summed squared components per cell
     mask_applied = likelihood_mask is not None
-    validated_likelihood_mask = _validate_likelihood_mask(
-        likelihood_mask, power.shape
-    )
+    validated_likelihood_mask = _validate_likelihood_mask(likelihood_mask, power.shape)
     if log_psd_offset is None:
         validated_log_offset = np.zeros_like(power)
         offset_applied = False
@@ -493,331 +179,83 @@ def fit_log_pspline_surface(
         if not np.isfinite(validated_log_offset).all():
             raise ValueError("log_psd_offset must contain only finite values")
         offset_applied = True
-    spline = _prepare_spline_bases(
+    nested = residual_structure == "stationary_plus_interaction"
+    basis = prepare_surface_basis(
         power,
         time_grid,
         freq_grid,
         config,
         n_components=coeffs.shape[0],
-        likelihood_mask=(validated_likelihood_mask if mask_applied else None),
+        likelihood_mask=validated_likelihood_mask if mask_applied else None,
         interior_knots_time=interior_knots_time,
         interior_knots_freq=interior_knots_freq,
+        nested=nested,
+        interaction_time_knots=interaction_time_knots,
     )
-    B_time = spline["B_time"]
-    B_freq = spline["B_freq"]
-    knots_time = spline["knots_time"]
-    knots_freq = spline["knots_freq_unit"]
-    P_time = create_bspline_roughness_penalty(
-        knots_time, degree=config.degree_time, derivative_order=config.diff_order_time
+    grid = prepare_likelihood_grid(
+        power,
+        time_grid,
+        freq_grid,
+        basis,
+        config,
+        n_components=coeffs.shape[0],
+        likelihood_mask=validated_likelihood_mask if mask_applied else None,
+        validated_log_offset=validated_log_offset,
+        offset_applied=offset_applied,
+        time_bin=time_bin,
+        freq_bin=freq_bin,
+        time_bin_starts=validated_time_starts if time_bin_starts is not None else None,
+        freq_bin_starts=validated_freq_starts if freq_bin_starts is not None else None,
     )
-    P_freq = create_bspline_roughness_penalty(
-        knots_freq, degree=config.degree_freq, derivative_order=config.diff_order_freq
+    model, model_args, init_sites = prepare_surface_model(
+        grid,
+        basis,
+        config,
+        mask_applied=mask_applied,
+        interaction_scale_prior=interaction_scale_prior,
+        likelihood_beta=likelihood_beta,
     )
-    whitened = whiten_penalty_pair(P_time, P_freq)
-    basis_eig_time = B_time @ whitened["U_time"]
-    basis_eig_freq = B_freq @ whitened["U_freq"]
-    nested = residual_structure == "stationary_plus_interaction"
-    if nested:
-        B_time_interaction_full, knots_time_interaction = create_bspline_basis(
-            time_grid,
-            interaction_time_knots,
-            degree=config.degree_time,
-        )
-        P_time_interaction_full = create_bspline_roughness_penalty(
-            knots_time_interaction,
-            degree=config.degree_time,
-            derivative_order=config.diff_order_time,
-        )
-        # Partition unity makes the final centered B-spline column redundant.
-        # Dropping it yields a full-rank basis spanning all zero-time-mean
-        # spline functions, so h(t,f) cannot absorb the stationary g(f).
-        time_basis_mean = B_time_interaction_full.mean(axis=0)
-        B_time_interaction = (
-            B_time_interaction_full - time_basis_mean[None, :]
-        )[:, :-1]
-        P_time_interaction = P_time_interaction_full[:-1, :-1]
-        whitened_interaction = whiten_penalty_pair(P_time_interaction, P_freq)
-        basis_interaction_time = (
-            B_time_interaction @ whitened_interaction["U_time"]
-        )
-        basis_nested_freq = B_freq @ whitened_interaction["U_freq"]
-        null_nested_freq = (
-            whitened_interaction["lam_freq"]
-            <= 1e-10 * max(whitened_interaction["lam_freq"].max(), 1.0)
-        )
-
-    n_components = coeffs.shape[0]
-    coarse_grained = (
-        time_bin > 1
-        or freq_bin > 1
-        or time_bin_starts is not None
-        or freq_bin_starts is not None
-    )
-    if coarse_grained:
-        # If S_i = R_i exp(r_b), where the spline residual r_b is treated as
-        # constant within a coarse block, the exact parameter-dependent block
-        # likelihood is
-        #   -1/2 [N_b r_b + exp(-r_b) sum_i(power_i / R_i)].
-        # The data-only sum_i log(R_i) is omitted, consistently with the other
-        # Whittle constants.  In particular, do not average log(R) and reuse its
-        # geometric mean in the quadratic term: that is biased whenever the
-        # reference varies inside a bin (notably near moving response nulls).
-        power_for_fit = (
-            _reference_scaled_power(
-                power,
-                validated_log_offset,
-                validated_likelihood_mask if mask_applied else None,
-            )
-            if offset_applied
-            else power
-        )
-        power_fit, time_grid_fit, freq_grid_fit, counts_fit = bin_power_rectangular(
-            power_for_fit,
-            time_grid,
-            freq_grid,
-            n_components,
-            time_bin=time_bin,
-            freq_bin=freq_bin,
-            time_bin_starts=(
-                validated_time_starts if time_bin_starts is not None else None
-            ),
-            freq_bin_starts=validated_freq_starts if freq_bin_starts is not None else None,
-            likelihood_mask=(validated_likelihood_mask if mask_applied else None),
-        )
-        B_time_fit = evaluate_bspline_basis(
-            time_grid_fit, knots_time, degree=config.degree_time
-        )
-        B_freq_fit = evaluate_bspline_basis(
-            freq_grid_fit / np.maximum(freq_grid[-1], 1e-12),
-            knots_freq,
-            degree=config.degree_freq,
-        )
-        basis_eig_time_fit = B_time_fit @ whitened["U_time"]
-        basis_eig_freq_fit = B_freq_fit @ whitened["U_freq"]
-        # The coarse model samples the residual log PSD.  The original
-        # full-resolution reference is added back only during reconstruction.
-        log_offset_fit = np.zeros_like(power_fit)
-    else:
-        if mask_applied:
-            power_fit = np.where(validated_likelihood_mask, power, 0.0)
-            counts_fit = n_components * validated_likelihood_mask.astype(int)
-        else:
-            power_fit = power
-            counts_fit = n_components
-        B_time_fit = B_time
-        B_freq_fit = B_freq
-        time_grid_fit = time_grid
-        basis_eig_time_fit = basis_eig_time
-        basis_eig_freq_fit = basis_eig_freq
-        log_offset_fit = validated_log_offset
-
-    if nested:
-        B_time_interaction_fit_full = evaluate_bspline_basis(
-            time_grid_fit,
-            knots_time_interaction,
-            degree=config.degree_time,
-        )
-        B_time_interaction_fit = (
-            B_time_interaction_fit_full - time_basis_mean[None, :]
-        )[:, :-1]
-        basis_interaction_time_fit = (
-            B_time_interaction_fit @ whitened_interaction["U_time"]
-        )
-        basis_nested_freq_fit = B_freq_fit @ whitened_interaction["U_freq"]
-
-    # The warm start fits log S to the per-component mean power, matching the
-    # likelihood mode (S = mean of squared components), on the fit grid.
-    init_power = (
-        _mean_power_for_masked_initialization(power_fit, counts_fit)
-        if mask_applied
-        else power_fit / counts_fit
-    )
-    init_power = init_power * np.exp(-log_offset_fit)
-    if nested:
-        target = np.log(init_power + power_floor(init_power))
-        count_weights = np.broadcast_to(
-            np.asarray(counts_fit, dtype=float), target.shape
-        )
-        stationary_target = np.divide(
-            np.sum(target * count_weights, axis=0),
-            count_weights.sum(axis=0),
-            out=np.median(target, axis=0),
-            where=count_weights.sum(axis=0) > 0,
-        )
-        lam_f = whitened_interaction["lam_freq"]
-        g_system = (
-            basis_nested_freq_fit.T @ basis_nested_freq_fit
-            + config.init_penalty_freq * np.diag(lam_f)
-            + config.ridge_eps * np.eye(lam_f.size)
-        )
-        g_init = np.linalg.solve(
-            g_system, basis_nested_freq_fit.T @ stationary_target
-        )
-        phi_stationary_init = max(
-            1e-2,
-            g_init.size / (float(np.sum(lam_f * g_init**2)) + 1e-6),
-        )
-        interaction_target = target - (basis_nested_freq_fit @ g_init)[None, :]
-        interaction_power = np.exp(interaction_target)
-        interaction_pls = initialize_with_penalized_least_squares(
-            interaction_power,
-            B_time_interaction_fit,
-            B_freq_fit,
-            P_time_interaction,
-            P_freq,
-            config,
-        )
-        h_eig_init = (
-            whitened_interaction["U_time"].T
-            @ np.asarray(interaction_pls["W"])
-            @ whitened_interaction["U_freq"]
-        )
-        h_surface_init = (
-            basis_interaction_time_fit
-            @ h_eig_init
-            @ basis_nested_freq_fit.T
-        )
-        sigma_init = float(np.clip(np.std(h_surface_init), 0.05, 1.0))
-        init_sites = {
-            "g": g_init,
-            "h": h_eig_init.reshape(-1),
-            "phi_stationary": float(np.log(phi_stationary_init)),
-            "sigma_interaction": sigma_init,
-        }
-        model = nested_residual_surface_model
-        model_args = (
-            jnp.asarray(power_fit),
-            jnp.asarray(counts_fit),
-            jnp.asarray(basis_interaction_time_fit),
-            jnp.asarray(basis_nested_freq_fit),
-            jnp.asarray(whitened_interaction["lam_time"]),
-            jnp.asarray(whitened_interaction["lam_freq"]),
-            jnp.asarray(whitened_interaction["joint_null"]),
-            jnp.asarray(null_nested_freq),
-            config,
-            interaction_scale_prior,
-            False,
-            likelihood_beta,
-            jnp.asarray(log_offset_fit),
-        )
-    else:
-        pls_init = initialize_with_penalized_least_squares(
-            init_power, B_time_fit, B_freq_fit, P_time, P_freq, config
-        )
-        init_sites = whitened_init_values(pls_init, whitened, config)
-        model = pspline_surface_model
-        model_args = (
-            jnp.asarray(power_fit),
-            jnp.asarray(counts_fit),
-            jnp.asarray(basis_eig_time_fit),
-            jnp.asarray(basis_eig_freq_fit),
-            jnp.asarray(whitened["lam_time"]),
-            jnp.asarray(whitened["lam_freq"]),
-            jnp.asarray(whitened["joint_null"]),
-            config,
-            False,  # never store the per-sample log_psd surface; reconstruct instead
-            likelihood_beta,
-            jnp.asarray(log_offset_fit),
-        )
-    kernel = NUTS(
+    mcmc, nuts_runtime_s = run_surface_nuts(
         model,
-        init_strategy=init_to_value(values=init_sites),
+        model_args,
+        init_sites,
+        n_warmup=n_warmup,
+        n_samples=n_samples,
+        num_chains=num_chains,
+        random_seed=random_seed,
         max_tree_depth=max_tree_depth,
         target_accept_prob=target_accept_prob,
+        progress_bar=progress_bar,
+        initial_state=initial_state,
     )
-    mcmc = MCMC(
-        kernel, num_warmup=n_warmup, num_samples=n_samples, num_chains=num_chains,
-        chain_method="sequential", progress_bar=progress_bar,
-    )
-    if initial_state is not None:
-        # Advancing a persistent chain: reuse the position and the adapted step
-        # size and mass matrix, and skip warmup entirely. The stored potential
-        # energy and gradient belong to the *previous* data (residual), so they
-        # must be recomputed under the new model args or every proposal is
-        # rejected through a stale energy difference.
-        from jax import value_and_grad
-        from numpyro.infer.util import potential_energy as _potential_energy
-
-        refreshed_pe, refreshed_grad = value_and_grad(
-            lambda z: _potential_energy(model, model_args, {}, z)
-        )(initial_state.z)
-        mcmc.post_warmup_state = initial_state._replace(
-            potential_energy=refreshed_pe, z_grad=refreshed_grad
-        )
-    nuts_t0 = time.perf_counter()
-    mcmc.run(
-        random.PRNGKey(random_seed), *model_args,
-        extra_fields=("diverging", "accept_prob", "num_steps", "potential_energy"),
-    )
-    nuts_runtime_s = time.perf_counter() - nuts_t0
 
     samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
-    if nested:
-        n_interaction_time = whitened_interaction["lam_time"].size
-        n_nested_freq = whitened_interaction["lam_freq"].size
-        g_samples = samples["g"].reshape(-1, n_nested_freq)
-        h_samples = samples["h"].reshape(
-            -1, n_interaction_time, n_nested_freq
-        )
-        sigma_samples = samples["sigma_interaction"].reshape(-1)
-        log_mean_residual, log_lower_residual, log_upper_residual = (
-            nested_surface_summaries(
-                g_samples,
-                h_samples,
-                sigma_samples,
-                basis_interaction_time,
-                basis_nested_freq,
-            )
-        )
-        interaction_eig_last = h_samples[-1]
-        log_last_residual = (
-            basis_nested_freq @ g_samples[-1]
-        )[None, :] + (
-            basis_interaction_time
-            @ interaction_eig_last
-            @ basis_nested_freq.T
-        )
-        eig_samples = h_samples
-        W_mean = (
-            whitened_interaction["U_time"]
-            @ h_samples.mean(axis=0)
-            @ whitened_interaction["U_freq"].T
-        )
-    else:
-        eig_samples = reconstruct_eig_coeff_samples(samples, whitened, config)
-        W_mean = (
-            whitened["U_time"]
-            @ eig_samples.mean(axis=0)
-            @ whitened["U_freq"].T
-        )
-        log_mean_residual, log_lower_residual, log_upper_residual = surface_summaries(
-            eig_samples, basis_eig_time, basis_eig_freq,
-            precomputed=samples.get("log_psd"),
-        )
-        log_last_residual = (
-            basis_eig_time @ eig_samples[-1] @ basis_eig_freq.T
-        )
-    log_mean = validated_log_offset + log_mean_residual
-    log_lower = validated_log_offset + log_lower_residual
-    log_upper = validated_log_offset + log_upper_residual
-    # The final retained draw is the exact conditional draw a blocked
-    # signal/noise sampler must pass to its signal block (never the mean).
-    log_last = validated_log_offset + log_last_residual
+    W_mean, log_mean, log_lower, log_upper, log_last = summarize_surface_samples(
+        samples,
+        basis.interaction.whitened if nested else basis.whitened,
+        config,
+        basis.interaction.basis_time if nested else basis.basis_time,
+        basis.interaction.basis_freq if nested else basis.basis_freq,
+        validated_log_offset,
+        nested=nested,
+    )
 
     fit_provenance = provenance(
         seed=random_seed,
         config=config,
         source_data={"shape": list(coeffs.shape)},
     )
-    fit_provenance["knot_allocation"] = spline["knot_allocation"]
+    fit_provenance["knot_allocation"] = basis.spline["knot_allocation"]
     # Retain the original summary keys for readers of older artifacts while the
     # nested recipe below records the complete realised partition.
-    fit_provenance.update({
-        "time_bin": int(time_bin),
-        "freq_bin": int(freq_bin),
-        "adaptive_frequency_bins": freq_bin_starts is not None,
-        "likelihood_grid_shape": [int(v) for v in power_fit.shape],
-    })
+    fit_provenance.update(
+        {
+            "time_bin": int(time_bin),
+            "freq_bin": int(freq_bin),
+            "adaptive_frequency_bins": freq_bin_starts is not None,
+            "likelihood_grid_shape": [int(v) for v in grid.power.shape],
+        }
+    )
     fit_provenance["binning"] = binning_provenance(
         n_time=time_grid.size,
         n_freq=freq_grid.size,
@@ -844,23 +282,21 @@ def fit_log_pspline_surface(
         "shape": list(validated_log_offset.shape),
         "coarse_likelihood_handling": (
             "cellwise_power_divided_by_reference_before_block_sum"
-            if offset_applied and coarse_grained
+            if offset_applied and grid.coarse_grained
             else "cellwise_offset_on_likelihood_grid"
             if offset_applied
             else None
         ),
         "data_only_reference_log_determinant_omitted": bool(
-            offset_applied and coarse_grained
+            offset_applied and grid.coarse_grained
         ),
     }
     fit_provenance["residual_structure"] = {
         "name": residual_structure,
-        "interaction_scale_prior": (
-            float(interaction_scale_prior) if nested else None
-        ),
+        "interaction_scale_prior": (float(interaction_scale_prior) if nested else None),
         "interaction_time_knots": int(interaction_time_knots) if nested else None,
         "interaction_time_basis_size": (
-            int(B_time_interaction.shape[1]) if nested else None
+            int(basis.interaction.B_time.shape[1]) if nested else None
         ),
         "interaction_zero_time_mean": bool(nested),
     }
@@ -873,21 +309,21 @@ def fit_log_pspline_surface(
         "log_psd_offset": validated_log_offset,
         "time_grid": np.asarray(time_grid),
         "freq_grid": np.asarray(freq_grid),
-        "knots_time": knots_time,
-        "knots_freq": knots_freq,
+        "knots_time": basis.spline["knots_time"],
+        "knots_freq": basis.spline["knots_freq_unit"],
         # ``knots_freq`` is retained in its historical normalized coordinate
         # for saved-run compatibility. The explicit physical vectors remove
         # ambiguity for callers selecting knots in Hz.
-        "knots_time_physical": spline["knots_time_physical"],
-        "knots_freq_physical": spline["knots_freq_physical"],
-        "knots_freq_unit": knots_freq,
-        "knot_allocation": spline["knot_allocation"],
-        "B_time": B_time,
-        "B_freq": B_freq,
-        "B_time_interaction": B_time_interaction if nested else None,
-        "basis_interaction_time": basis_interaction_time if nested else None,
-        "basis_nested_freq": basis_nested_freq if nested else None,
-        "whitened": whitened_interaction if nested else whitened,
+        "knots_time_physical": basis.spline["knots_time_physical"],
+        "knots_freq_physical": basis.spline["knots_freq_physical"],
+        "knots_freq_unit": basis.spline["knots_freq_unit"],
+        "knot_allocation": basis.spline["knot_allocation"],
+        "B_time": basis.spline["B_time"],
+        "B_freq": basis.spline["B_freq"],
+        "B_time_interaction": basis.interaction.B_time if nested else None,
+        "basis_interaction_time": basis.interaction.basis_time if nested else None,
+        "basis_nested_freq": basis.interaction.basis_freq if nested else None,
+        "whitened": basis.interaction.whitened if nested else basis.whitened,
         "samples": samples,
         "W_mean": W_mean,
         "residual_structure": residual_structure,
@@ -912,238 +348,9 @@ def fit_log_pspline_surface(
         "freq_bin_starts": (
             None if freq_bin_starts is None else validated_freq_starts.copy()
         ),
-        "likelihood_grid_shape": tuple(int(v) for v in power_fit.shape),
+        "likelihood_grid_shape": tuple(int(v) for v in grid.power.shape),
         "provenance": fit_provenance,
     }
-
-
-def _validate_explicit_interior_knots(
-    knots: np.ndarray | None,
-    grid: np.ndarray,
-    expected_count: int,
-    *,
-    axis: str,
-) -> np.ndarray | None:
-    """Validate explicit knots before basis construction or sampler startup."""
-    if knots is None:
-        return None
-    knots = np.asarray(knots, dtype=float)
-    if knots.ndim != 1:
-        raise ValueError(f"interior_knots_{axis} must be one-dimensional.")
-    if knots.size != expected_count:
-        raise ValueError(
-            f"interior_knots_{axis} must contain exactly {expected_count} values "
-            f"to match config.n_interior_knots_{axis}."
-        )
-    if not np.isfinite(knots).all():
-        raise ValueError(f"interior_knots_{axis} must contain only finite values.")
-    if np.any(np.diff(knots) <= 0):
-        raise ValueError(f"interior_knots_{axis} must be strictly increasing.")
-    if np.any(knots <= grid[0]) or np.any(knots >= grid[-1]):
-        unit = " Hz" if axis == "freq" else ""
-        raise ValueError(
-            f"interior_knots_{axis} must lie strictly inside the analysis-grid "
-            f"range ({grid[0]:g}, {grid[-1]:g}){unit}."
-        )
-    return knots
-
-
-def _prepare_spline_bases(
-    power: np.ndarray,
-    time_grid: np.ndarray,
-    freq_grid: np.ndarray,
-    config: PSplineConfig,
-    *,
-    n_components: int,
-    likelihood_mask: np.ndarray | None = None,
-    interior_knots_time: np.ndarray | None = None,
-    interior_knots_freq: np.ndarray | None = None,
-) -> dict[str, object]:
-    """Build production bases and resolve the configured knot allocation."""
-    explicit_time = _validate_explicit_interior_knots(
-        interior_knots_time,
-        time_grid,
-        config.n_interior_knots_time,
-        axis="time",
-    )
-    explicit_freq = _validate_explicit_interior_knots(
-        interior_knots_freq,
-        freq_grid,
-        config.n_interior_knots_freq,
-        axis="freq",
-    )
-    selected_time = explicit_time
-    selected_freq = explicit_freq
-    allocation = {
-        "time": "explicit" if explicit_time is not None else "linear",
-        "frequency": "explicit" if explicit_freq is not None else config.freq_knot_strategy,
-    }
-    if selected_freq is None:
-        if config.freq_knot_strategy == "adaptive":
-            pilot = fit_adaptive_knots(
-                power,
-                time_grid,
-                freq_grid,
-                counts=float(n_components),
-                train_mask=likelihood_mask,
-                n_pilot_knots_time=max(8, config.n_interior_knots_time),
-                n_pilot_knots_freq=max(16, config.n_interior_knots_freq),
-                n_knots_time=config.n_interior_knots_time,
-                n_knots_freq=config.n_interior_knots_freq,
-                method="curvature",
-            )
-            selected_freq = pilot.freq_knots
-        elif config.freq_knot_strategy == "log":
-            if freq_grid[0] <= 0:
-                raise ValueError("freq_knot_strategy='log' requires a strictly positive frequency grid.")
-            selected_freq = np.geomspace(
-                freq_grid[0], freq_grid[-1], config.n_interior_knots_freq + 2
-            )[1:-1]
-
-    freq_scale = np.maximum(freq_grid[-1], 1e-12)
-    freq_unit = freq_grid / freq_scale
-    selected_freq_unit = None if selected_freq is None else selected_freq / freq_scale
-    B_time, knots_time = create_bspline_basis(
-        time_grid,
-        config.n_interior_knots_time,
-        degree=config.degree_time,
-        interior_knots=selected_time,
-    )
-    B_freq, knots_freq_unit = create_bspline_basis(
-        freq_unit,
-        config.n_interior_knots_freq,
-        degree=config.degree_freq,
-        interior_knots=selected_freq_unit,
-    )
-    return {
-        "B_time": B_time,
-        "B_freq": B_freq,
-        "knots_time": knots_time,
-        "knots_freq_unit": knots_freq_unit,
-        "knots_time_physical": knots_time.copy(),
-        "knots_freq_physical": knots_freq_unit * freq_scale,
-        "knot_allocation": allocation,
-    }
-
-
-def reconstruct_eig_coeff_samples(
-    samples: dict[str, np.ndarray],
-    whitened: dict[str, np.ndarray],
-    config: PSplineConfig,
-) -> np.ndarray:
-    """Per-sample eigen-coefficients ``Z`` of shape ``(n_samples, K_t, K_f)``.
-
-    These are tiny (``K_t K_f`` numbers per sample) and fully determine the
-    surface, so summaries can be reconstructed without storing it per sample.
-    """
-    lam_t = whitened["lam_time"]
-    lam_f = whitened["lam_freq"]
-    joint_null = whitened["joint_null"]
-    n_t, n_f = lam_t.size, lam_f.size
-
-    s = samples["s"].reshape(-1, n_t, n_f)
-    if config.centered:
-        return s
-    phi_time = np.exp(samples["phi_time"])[:, None, None]  # the site stores log phi
-    phi_freq = np.exp(samples["phi_freq"])[:, None, None]
-    d = phi_time * lam_t[None, :, None] + phi_freq * lam_f[None, None, :]
-    scale = np.where(
-        joint_null[None],
-        1.0 / np.sqrt(config.null_precision),
-        1.0 / np.sqrt(d + config.ridge_eps),
-    )
-    return s * scale
-
-
-def _summary_frequency_chunk(n_draws: int, n_time: int, requested: int) -> int:
-    """Bound a float64 draw surface to 128 MiB before percentile workspace."""
-    return max(1, min(requested, (128 * 1024**2) // max(1, n_draws*n_time*8)))
-
-
-def surface_summaries(
-    eig_samples: np.ndarray,
-    basis_eig_time: np.ndarray,
-    basis_eig_freq: np.ndarray,
-    *,
-    precomputed: np.ndarray | None = None,
-    lower_pct: float = 5.0,
-    upper_pct: float = 95.0,
-    freq_chunk: int = 256,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Posterior mean and central interval of ``log S`` on the analysis grid.
-
-    The mean is reconstructed from the mean eigen-coefficients (exact, since the
-    surface is linear in them); the interval is reconstructed in frequency chunks
-    to bound peak memory. If ``precomputed`` (the stored per-sample surface) is
-    given, it is used directly.
-    """
-    log_mean = basis_eig_time @ eig_samples.mean(axis=0) @ basis_eig_freq.T
-    if precomputed is not None:
-        return (log_mean,
-                np.percentile(precomputed, lower_pct, axis=0),
-                np.percentile(precomputed, upper_pct, axis=0))
-
-    n_t = basis_eig_time.shape[0]
-    n_f = basis_eig_freq.shape[0]
-    freq_chunk = _summary_frequency_chunk(len(eig_samples), n_t, freq_chunk)
-    lower = np.empty((n_t, n_f))
-    upper = np.empty((n_t, n_f))
-    for j0 in range(0, n_f, freq_chunk):
-        bf = basis_eig_freq[j0:j0 + freq_chunk]
-        # optimize=True factorises the 3-operand contraction into two BLAS
-        # matmuls; without it numpy falls back to a naive element-wise kernel
-        # that scales catastrophically on large (time x freq) grids.
-        chunk = np.einsum("ta,nab,jb->ntj", basis_eig_time, eig_samples, bf,
-                          optimize=True)
-        lower[:, j0:j0 + freq_chunk], upper[:, j0:j0 + freq_chunk] = np.percentile(
-            chunk, [lower_pct, upper_pct], axis=0)
-    return log_mean, lower, upper
-
-
-def nested_surface_summaries(
-    g_samples: np.ndarray,
-    h_samples: np.ndarray,
-    sigma_samples: np.ndarray,
-    basis_interaction_time: np.ndarray,
-    basis_eig_freq: np.ndarray,
-    *,
-    lower_pct: float = 5.0,
-    upper_pct: float = 95.0,
-    freq_chunk: int = 256,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Summarize ``g(f) + sigma*h(t,f)`` without storing full draw surfaces."""
-    g_samples = np.asarray(g_samples)
-    h_samples = np.asarray(h_samples)
-    sigma_samples = np.asarray(sigma_samples).reshape(-1)
-    stationary_mean = g_samples.mean(axis=0) @ basis_eig_freq.T
-    # h_samples are already drawn in the centered hierarchy with prior scale
-    # sigma_interaction; do not multiply by sigma a second time.
-    interaction_coefficients = h_samples
-    interaction_mean = (
-        basis_interaction_time
-        @ interaction_coefficients.mean(axis=0)
-        @ basis_eig_freq.T
-    )
-    log_mean = stationary_mean[None, :] + interaction_mean
-    n_t = basis_interaction_time.shape[0]
-    n_f = basis_eig_freq.shape[0]
-    freq_chunk = _summary_frequency_chunk(len(g_samples), n_t, freq_chunk)
-    lower = np.empty((n_t, n_f))
-    upper = np.empty((n_t, n_f))
-    for j0 in range(0, n_f, freq_chunk):
-        bf = basis_eig_freq[j0:j0 + freq_chunk]
-        stationary_chunk = g_samples @ bf.T
-        interaction_chunk = np.einsum(
-            "ta,nab,jb->ntj",
-            basis_interaction_time,
-            interaction_coefficients,
-            bf,
-            optimize=True,
-        )
-        chunk = stationary_chunk[:, None, :] + interaction_chunk
-        lower[:, j0:j0 + freq_chunk], upper[:, j0:j0 + freq_chunk] = np.percentile(
-            chunk, [lower_pct, upper_pct], axis=0)
-    return log_mean, lower, upper
 
 
 def _wdm_coeffs_2d(wdm) -> np.ndarray:
@@ -1172,11 +379,17 @@ def wdm_analysis_coefficients(
         raise ValueError("WDM input data must be non-empty.")
     if dt <= 0:
         raise ValueError("dt must be strictly positive.")
-    if not isinstance(nt, (int, np.integer)) or isinstance(nt, (bool, np.bool_)) or nt <= 0:
+    if (
+        not isinstance(nt, (int, np.integer))
+        or isinstance(nt, (bool, np.bool_))
+        or nt <= 0
+    ):
         raise ValueError("nt must be a positive integer.")
     n_total = data.size
     if n_total % nt != 0:
-        raise ValueError(f"WDM sizing requires N ({n_total}) to be divisible by nt ({nt}).")
+        raise ValueError(
+            f"WDM sizing requires N ({n_total}) to be divisible by nt ({nt})."
+        )
     nf = n_total // nt
     if nt % 2 != 0 or nf % 2 != 0:
         raise ValueError(
@@ -1252,16 +465,18 @@ def run_wdm_psd_mcmc(
         coeffs_fit[None, :, :], time_grid, freq_grid, config=config, **fit_kwargs
     )
     results.update({"coeffs_fit": coeffs_fit})
-    results["provenance"].update({
-        "dt": float(dt),
-        "nt": int(nt),
-        "trims": {
-            "time_bins": config.trim_time_bins,
-            "low_freq_channels": config.trim_low_freq_channels,
-            "high_freq_channels": config.trim_high_freq_channels,
-        },
-        "source_data": {"shape": list(np.asarray(data).shape)},
-    })
+    results["provenance"].update(
+        {
+            "dt": float(dt),
+            "nt": int(nt),
+            "trims": {
+                "time_bins": config.trim_time_bins,
+                "low_freq_channels": config.trim_low_freq_channels,
+                "high_freq_channels": config.trim_high_freq_channels,
+            },
+            "source_data": {"shape": list(np.asarray(data).shape)},
+        }
+    )
     return results
 
 
@@ -1271,7 +486,17 @@ def evaluate_dense_posterior_mean(
     n_time_dense: int = 200,
     n_freq_dense: int = 200,
 ) -> dict[str, np.ndarray]:
-    """Evaluate the posterior-mean spline surface on a dense plotting grid."""
+    """Evaluate a tensor posterior mean without an offset on a dense grid.
+
+    Offset and nested residual fits require their native-grid summaries.
+    """
+    if results.get("residual_structure", "tensor") != "tensor" or np.any(
+        results.get("log_psd_offset", 0.0)
+    ):
+        raise ValueError(
+            "Dense reconstruction requires a tensor model without log_psd_offset. "
+            "Use the stored analysis grid for offset or stationary-plus-interaction fits."
+        )
     config: PSplineConfig = results["config"]  # type: ignore[assignment]
     time_grid = results["time_grid"]
     freq_grid = results["freq_grid"]

@@ -222,6 +222,8 @@ def _render(output_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--smoothing-prior", choices=["gamma", "half_normal_sigma"], default="gamma")
+    parser.add_argument("--roughness-scale", type=float, default=1.0)
     parser.add_argument("--repeats", type=int, default=100)
     parser.add_argument("--warmup", type=int, default=500)
     parser.add_argument("--samples", type=int, default=500)
@@ -251,7 +253,13 @@ def main() -> None:
         _render(output_dir)
         return
 
-    config = _config()
+    from dataclasses import replace
+    config = replace(_config(), smoothing_prior=args.smoothing_prior, roughness_scale=args.roughness_scale)
+    protocol = output_dir / "protocol.json"
+    if protocol.exists():
+        old = json.loads(protocol.read_text())["config"]
+        if old.get("smoothing_prior", "gamma") != args.smoothing_prior or old.get("roughness_scale", 1.0) != args.roughness_scale:
+            raise ValueError("Output directory contains a different smoothing prior")
     _write_protocol(output_dir / "protocol.json", config, args)
     rows_path = output_dir / "per_repeat.csv"
     completed = _completed_repeats(rows_path)

@@ -9,11 +9,17 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-LDG = Path("/Users/avi/Documents/projects/wdm_psd/lisa_data_generation")
+LDG = Path(__file__).resolve().parents[3] / "lisa_data_generation"
 sys.path.insert(0, str(LDG))
 
-from run_aet_diagonal_pilot import analytic_aet_noise_psd, wdm_valid_length
-from tv_pspline_psd.lisa_aet import AET_CHANNELS
+from run_aet_diagonal_pilot import (  # noqa: E402 - sibling study path must be configured first
+    analytic_aet_noise_psd,
+    wdm_valid_length,
+)
+
+from tv_pspline_psd.lisa_aet import (  # noqa: E402
+    AET_CHANNELS,  # noqa: E402 - sibling study path must be configured first
+)
 
 ARCHIVE = LDG / "combined_esa_xyz.h5"
 ORBITS = LDG / "noise2a" / "orbits.h5"

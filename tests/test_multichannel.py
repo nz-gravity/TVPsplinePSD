@@ -272,8 +272,9 @@ def _component_problem():
 
 def test_component_noise_prior_matches_requested_covariance():
     """lam = lam_loc + L^-T z / sqrt(phi) must realise N(lam_loc, (phi P)^-1)."""
-    from tv_pspline_psd.splines import create_difference_penalty_matrix
     import scipy.linalg as sla
+
+    from tv_pspline_psd.splines import create_difference_penalty_matrix
 
     k = 8
     penalty = create_difference_penalty_matrix(k, diff_order=2)

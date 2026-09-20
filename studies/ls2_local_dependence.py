@@ -22,7 +22,6 @@ import numpy as np
 from tv_pspline_psd import PSplineConfig, wdm_analysis_coefficients
 from tv_pspline_psd.datasets import simulate_ls2
 
-
 DT = 0.1
 NF = 32
 NT_VALUES = (32, 64, 128, 256, 512, 1024)

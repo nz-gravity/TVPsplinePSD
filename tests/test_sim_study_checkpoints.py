@@ -59,3 +59,13 @@ def test_reference_cache_rejects_incompatible_metadata(tmp_path, monkeypatch) ->
 
     with pytest.raises(ValueError, match="tang_m"):
         study._read_reference_cache(path, 32, 6, 2)
+
+
+def test_checkpoint_rejects_changed_roughness_prior(tmp_path, monkeypatch):
+    path = tmp_path / 'checkpoint.npz'
+    study._atomic_savez(path, **study._checkpoint_arrays(
+        _fake_metrics(0, 1), n_total=1024, freq_knots=6, repeat_start=0, repeats_target=1))
+    monkeypatch.setattr(study, 'SMOOTHING_PRIOR', 'half_normal_sigma')
+    monkeypatch.setattr(study, 'ROUGHNESS_SCALE', 10.)
+    with pytest.raises(ValueError, match='different smoothing prior'):
+        study._load_checkpoint(path, n_total=1024, freq_knots=6, repeat_start=0, repeats_target=1)

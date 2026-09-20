@@ -408,6 +408,8 @@ def run_tang_dynamic_whittle_mcmc(
     n_samples: int = 300,
     num_chains: int = 1,
     random_seed: int = 7,
+    max_tree_depth: int = 10,
+    target_accept_prob: float = 0.85,
     time_bin: int = 1,
     freq_bin: int = 1,
     freq_bin_starts: np.ndarray | None = None,
@@ -510,7 +512,7 @@ def run_tang_dynamic_whittle_mcmc(
     kernel = NUTS(
         _dynamic_whittle_model,
         init_strategy=init_to_value(values=init_sites),
-        max_tree_depth=10, target_accept_prob=0.85,
+        max_tree_depth=max_tree_depth, target_accept_prob=target_accept_prob,
     )
     mcmc = MCMC(kernel, num_warmup=n_warmup, num_samples=n_samples,
                 num_chains=num_chains, chain_method="sequential", progress_bar=False)
@@ -521,7 +523,7 @@ def run_tang_dynamic_whittle_mcmc(
         jnp.asarray(basis_eig_time), jnp.asarray(basis_eig_freq_unique),
         jnp.asarray(whitened["lam_time"]), jnp.asarray(whitened["lam_freq"]),
         jnp.asarray(whitened["joint_null"]), config,
-        extra_fields=("diverging",),
+        extra_fields=("diverging", "accept_prob", "num_steps", "potential_energy", "energy"),
     )
     nuts_runtime_s = time.perf_counter() - nuts_t0
 

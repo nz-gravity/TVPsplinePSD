@@ -46,11 +46,11 @@ from .joint import (  # noqa: E402
     run_multichannel_joint_mcmc,
 )
 from .metrics import (  # noqa: E402
-    interval_coverage,
     bias_log_psd,
+    interval_coverage,
     mse_log_psd,
-    rmse_log_psd,
     relative_surface_error,
+    rmse_log_psd,
 )
 from .moving_periodogram import (  # noqa: E402
     bin_tang_ordinates,

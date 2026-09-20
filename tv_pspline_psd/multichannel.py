@@ -27,22 +27,20 @@ likelihood approximation, not a full AET covariance analysis.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import time as walltime
+from dataclasses import dataclass
 
 import jax
-
-jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
 import numpyro
 import numpyro.distributions as dist
+import scipy.linalg as sla
 from numpyro.diagnostics import summary
 from numpyro.infer import MCMC, NUTS, init_to_value
 
-import scipy.linalg as sla
-
 from tv_pspline_psd.config import PSplineConfig
+from tv_pspline_psd.lisa_aet import AET_CHANNELS
 from tv_pspline_psd.model import (
     eigen_prior_scale,
     tensor_product_surface,
@@ -53,8 +51,6 @@ from tv_pspline_psd.splines import (
     create_difference_penalty_matrix,
     evaluate_bspline_basis,
 )
-
-from tv_pspline_psd.lisa_aet import AET_CHANNELS
 
 
 def _stable_log_knee_ratio(frequency, f_knee, reference_f_knee, gamma):

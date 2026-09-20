@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from numbers import Integral
 from typing import Literal
 
@@ -14,8 +15,8 @@ class PSplineConfig:
     The model fits ``log S(t, f) = B_t W B_f^T`` with a centered or
     non-centered tensor-product P-spline prior in a whitened eigenbasis.
     Smoothness is controlled by two precisions, ``phi_time`` and ``phi_freq``,
-    each given a ``Gamma(alpha_phi, beta_phi)`` hyperprior and sampled on the
-    log scale for a well-behaved geometry.
+    sampled on the log scale. The hyperprior is either Gamma on precision or
+    half-Normal on roughness ``sigma = phi**(-1/2)``.
     """
 
     # Basis.
@@ -31,6 +32,8 @@ class PSplineConfig:
     # Smoothing-precision hyperprior: phi ~ Gamma(alpha_phi, beta_phi).
     alpha_phi: float = 2.0
     beta_phi: float = 1.0
+    smoothing_prior: Literal["gamma", "half_normal_sigma"] = "gamma"
+    roughness_scale: float = 1.0
 
     # Whitened-prior numerics.
     null_precision: float = 1e-4  # weak prior on the penalty null space (bilinear trend)
@@ -96,9 +99,12 @@ class PSplineConfig:
             "null_precision",
             "ridge_eps",
             "phi_log_base_scale",
+            "roughness_scale",
         ):
-            if getattr(self, name) <= 0:
-                raise ValueError(f"{name} must be strictly positive.")
+            if not isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be finite and strictly positive.")
+        if self.smoothing_prior not in {"gamma", "half_normal_sigma"}:
+            raise ValueError("smoothing_prior must be 'gamma' or 'half_normal_sigma'.")
         for name in (
             "init_penalty_time",
             "init_penalty_freq",

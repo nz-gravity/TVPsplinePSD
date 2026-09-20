@@ -56,7 +56,7 @@ for lo, hi in [(0.0, 0.5), (0.5, 0.7), (0.7, 1.0), (1.0, 2.0), (2.0, 4.0), (4.0,
 
 ideal_support = np.abs(u) <= 2.0 / 3.0
 outside = kernel[~ideal_support]
-print(f"\nideal window support is |u| <= 2/3 (a=1/3)")
+print("\nideal window support is |u| <= 2/3 (a=1/3)")
 print(f"  power fraction inside  : {kernel[ideal_support].sum() / kernel.sum():.10f}")
 print(f"  power fraction outside : {outside.sum() / kernel.sum():.3e}")
 print(f"  worst sidelobe outside : {outside.max():.3e}")

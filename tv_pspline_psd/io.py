@@ -1,6 +1,6 @@
 """Persist a fit as a small ArviZ ``InferenceData`` (NetCDF) and reload it.
 
-Only the tiny posterior sites (``s``, ``phi_time``, ``phi_freq``) are stored -- the
+Compact posterior sites are stored for tensor or nested residual models -- the
 ``log S(t, f)`` surface is regenerated from them on demand. With the whitening
 matrices and eigen-bases kept in ``constant_data``, the full posterior surface
 (mean and credible interval) is reconstructed exactly, so a saved run supports
@@ -9,10 +9,10 @@ that is megabytes rather than gigabytes.
 
 Layout of the saved tree:
 
-* ``posterior`` -- ``s``, ``phi_time``, ``phi_freq`` (chain, draw, ...).
+* ``posterior`` -- tensor or nested model sites (chain, draw, ...).
 * ``sample_stats`` -- ``diverging``, ``acceptance_rate``, ``n_steps``, ``lp``.
 * ``constant_data`` -- grids, knots, eigen-bases, whitening (everything needed to
-  rebuild the surface) plus ``power`` and an optional ``true_psd``.
+  rebuild the surface), fixed offsets, masks, power and an optional true PSD.
 * root ``attrs`` -- ``config`` (JSON), ``nuts_runtime_s``, ``mse_nuts``, and
   ``divergences``.
 """
@@ -28,14 +28,19 @@ import numpy as np
 import xarray as xr
 
 from .config import PSplineConfig
-from .inference import reconstruct_eig_coeff_samples, surface_summaries
 from .metrics import mse_log_psd
+from .posterior import (
+    nested_surface_summaries,
+    reconstruct_eig_coeff_samples,
+    surface_summaries,
+)
 from .provenance import provenance
 from .splines import evaluate_bspline_basis
 
 # Names threaded through reconstruct_eig_coeff_samples / surface_summaries.
 _WHITENED_KEYS = ("U_time", "U_freq", "lam_time", "lam_freq", "joint_null")
 _POSTERIOR_SITES = ("s", "phi_time", "phi_freq")
+_NESTED_SITES = ("g", "h", "sigma_interaction")
 
 
 def results_to_idata(
@@ -64,42 +69,76 @@ def results_to_idata(
     if surface_vars:
         idata["posterior"] = idata["posterior"].dataset.drop_vars(surface_vars)
 
-    basis_eig_time = np.asarray(results["B_time"]) @ np.asarray(whitened["U_time"])
-    basis_eig_freq = np.asarray(results["B_freq"]) @ np.asarray(whitened["U_freq"])
+    structure = results.get("residual_structure", "tensor")
     const = {
         "time_grid": ("time", np.asarray(results["time_grid"])),
         "freq_grid": ("freq", np.asarray(results["freq_grid"])),
         "knots_time": ("knot_time", np.asarray(results["knots_time"])),
         "knots_freq": ("knot_freq", np.asarray(results["knots_freq"])),
-        "basis_eig_time": (("time", "eig_time"), basis_eig_time),
-        "basis_eig_freq": (("freq", "eig_freq"), basis_eig_freq),
-        "U_time": (("basis_time", "eig_time"), np.asarray(whitened["U_time"])),
-        "U_freq": (("basis_freq", "eig_freq"), np.asarray(whitened["U_freq"])),
-        "lam_time": ("eig_time", np.asarray(whitened["lam_time"])),
-        "lam_freq": ("eig_freq", np.asarray(whitened["lam_freq"])),
-        "joint_null": (("eig_time", "eig_freq"), np.asarray(whitened["joint_null"])),
         "power": (("time", "freq"), np.asarray(results["power"])),
     }
+    if structure == "stationary_plus_interaction":
+        const["basis_interaction_time"] = (
+            ("time", "eig_time"),
+            np.asarray(results["basis_interaction_time"]),
+        )
+        const["basis_nested_freq"] = (
+            ("freq", "eig_freq"),
+            np.asarray(results["basis_nested_freq"]),
+        )
+    elif structure == "tensor":
+        const.update(
+            {
+                "basis_eig_time": (
+                    ("time", "eig_time"),
+                    np.asarray(results["B_time"]) @ np.asarray(whitened["U_time"]),
+                ),
+                "basis_eig_freq": (
+                    ("freq", "eig_freq"),
+                    np.asarray(results["B_freq"]) @ np.asarray(whitened["U_freq"]),
+                ),
+                "U_time": (("basis_time", "eig_time"), np.asarray(whitened["U_time"])),
+                "U_freq": (("basis_freq", "eig_freq"), np.asarray(whitened["U_freq"])),
+                "lam_time": ("eig_time", np.asarray(whitened["lam_time"])),
+                "lam_freq": ("eig_freq", np.asarray(whitened["lam_freq"])),
+                "joint_null": (
+                    ("eig_time", "eig_freq"),
+                    np.asarray(whitened["joint_null"]),
+                ),
+            }
+        )
+    else:
+        raise ValueError(f"Unsupported residual_structure: {structure!r}")
+    if results.get("log_psd_offset") is not None:
+        const["log_psd_offset"] = (
+            ("time", "freq"),
+            np.asarray(results["log_psd_offset"]),
+        )
     if "likelihood_mask" in results:
         const["likelihood_mask"] = (
-            ("time", "freq"), np.asarray(results["likelihood_mask"], dtype=bool)
+            ("time", "freq"),
+            np.asarray(results["likelihood_mask"], dtype=bool),
         )
     # New explicit-knot fits retain the historical normalized ``knots_freq``
     # for reconstruction compatibility and also persist the user-facing grid
     # coordinates. Older result dictionaries simply omit these optional vars.
     if "knots_time_physical" in results:
         const["knots_time_physical"] = (
-            "knot_time", np.asarray(results["knots_time_physical"])
+            "knot_time",
+            np.asarray(results["knots_time_physical"]),
         )
     if "knots_freq_physical" in results:
         const["knots_freq_physical"] = (
-            "knot_freq", np.asarray(results["knots_freq_physical"])
+            "knot_freq",
+            np.asarray(results["knots_freq_physical"]),
         )
     if true_psd is not None:
         const["true_psd"] = (("time", "freq"), np.asarray(true_psd))
     idata["constant_data"] = xr.Dataset(const)
 
     attrs: dict[str, object] = {
+        "schema_version": 2,
+        "residual_structure": structure,
         "config": json.dumps(asdict(config)),
         "provenance": json.dumps(results.get("provenance", provenance(config=config))),
         "nuts_runtime_s": _as_float(results.get("nuts_runtime_s")),
@@ -149,12 +188,14 @@ def _config_from_idata(idata: az.InferenceData) -> PSplineConfig:
     return PSplineConfig(**config_data)
 
 
-def _posterior_samples(idata: az.InferenceData) -> dict[str, np.ndarray]:
+def _posterior_samples(
+    idata: az.InferenceData, sites: tuple[str, ...] = _POSTERIOR_SITES
+) -> dict[str, np.ndarray]:
     """Posterior sites as ``(n_samples, ...)`` arrays (chains stacked)."""
     post = idata["posterior"].dataset
-    stacked = post[list(_POSTERIOR_SITES)].stack(sample=("chain", "draw"))
+    stacked = post[list(sites)].stack(sample=("chain", "draw"))
     out = {}
-    for name in _POSTERIOR_SITES:
+    for name in sites:
         arr = np.asarray(stacked[name].transpose("sample", ...).values)
         out[name] = arr
     return out
@@ -170,9 +211,13 @@ def surface_from_idata(
 ) -> dict[str, np.ndarray]:
     """Regenerate the posterior ``log S`` / PSD surface from a saved fit.
 
-    On the stored analysis grid this is exact. Passing ``n_time_dense`` /
+    On the stored analysis grid this is exact for tensor and nested residual
+    models, including fixed log-PSD offsets. Legacy files that omitted an
+    applied offset cannot be reconstructed and raise a ValueError.
+    Passing ``n_time_dense`` /
     ``n_freq_dense`` re-evaluates the B-spline bases on a denser plotting grid
-    (posterior mean only, matching ``evaluate_dense_posterior_mean``).
+    (posterior mean only, matching ``evaluate_dense_posterior_mean``). Dense
+    evaluation currently supports tensor models without a nonzero offset only.
 
     Returns a dict with ``time_grid``, ``freq_grid``, ``log_psd_mean`` and
     ``psd_geometric_mean`` (always; with the deprecated ``psd_mean`` alias),
@@ -181,21 +226,55 @@ def surface_from_idata(
     """
     config = _config_from_idata(idata)
     const = idata["constant_data"].dataset
-    whitened = {k: np.asarray(const[k].values) for k in _WHITENED_KEYS}
-    samples = _posterior_samples(idata)
-    eig_samples = reconstruct_eig_coeff_samples(samples, whitened, config)
-
-    if n_time_dense is not None or n_freq_dense is not None:
-        return _dense_surface(
-            const, config, whitened, eig_samples, n_time_dense, n_freq_dense
+    structure = idata.attrs.get("residual_structure", "tensor")
+    offset = np.asarray(const["log_psd_offset"]) if "log_psd_offset" in const else 0.0
+    # Legacy files may record that an offset was used without storing its values.
+    metadata = json.loads(idata.attrs.get("provenance", "{}"))
+    if "log_psd_offset" not in const and metadata.get("log_psd_offset", {}).get(
+        "applied"
+    ):
+        raise ValueError(
+            "This legacy file omitted log_psd_offset; regenerate it from the original fit."
         )
-
-    basis_eig_time = np.asarray(const["basis_eig_time"].values)
-    basis_eig_freq = np.asarray(const["basis_eig_freq"].values)
-    log_mean, log_lower, log_upper = surface_summaries(
-        eig_samples, basis_eig_time, basis_eig_freq,
-        lower_pct=lower_pct, upper_pct=upper_pct,
-    )
+    dense = n_time_dense is not None or n_freq_dense is not None
+    if dense and (structure != "tensor" or np.any(offset)):
+        raise ValueError(
+            "Dense reconstruction requires a tensor model without log_psd_offset. "
+            "Use the stored analysis grid for offset or stationary-plus-interaction fits."
+        )
+    if structure == "stationary_plus_interaction":
+        samples = _posterior_samples(idata, _NESTED_SITES)
+        basis_time = np.asarray(const["basis_interaction_time"])
+        basis_freq = np.asarray(const["basis_nested_freq"])
+        log_mean, log_lower, log_upper = nested_surface_summaries(
+            samples["g"].reshape(-1, basis_freq.shape[1]),
+            samples["h"].reshape(-1, basis_time.shape[1], basis_freq.shape[1]),
+            samples["sigma_interaction"],
+            basis_time,
+            basis_freq,
+            lower_pct=lower_pct,
+            upper_pct=upper_pct,
+        )
+    elif structure == "tensor":
+        whitened = {k: np.asarray(const[k].values) for k in _WHITENED_KEYS}
+        samples = _posterior_samples(idata)
+        eig_samples = reconstruct_eig_coeff_samples(samples, whitened, config)
+        if dense:
+            return _dense_surface(
+                const, config, whitened, eig_samples, n_time_dense, n_freq_dense
+            )
+        log_mean, log_lower, log_upper = surface_summaries(
+            eig_samples,
+            np.asarray(const["basis_eig_time"]),
+            np.asarray(const["basis_eig_freq"]),
+            lower_pct=lower_pct,
+            upper_pct=upper_pct,
+        )
+    else:
+        raise ValueError(f"Unsupported residual_structure: {structure!r}")
+    log_mean = log_mean + offset
+    log_lower = log_lower + offset
+    log_upper = log_upper + offset
     surface = {
         "time_grid": np.asarray(const["time_grid"].values),
         "freq_grid": np.asarray(const["freq_grid"].values),
@@ -227,7 +306,8 @@ def _dense_surface(const, config, whitened, eig_samples, n_time_dense, n_freq_de
         dense_time, np.asarray(const["knots_time"].values), degree=config.degree_time
     )
     B_freq = evaluate_bspline_basis(
-        dense_freq_unit, np.asarray(const["knots_freq"].values),
+        dense_freq_unit,
+        np.asarray(const["knots_freq"].values),
         degree=config.degree_freq,
     )
     # Posterior-mean coefficient matrix in the original (un-whitened) basis.

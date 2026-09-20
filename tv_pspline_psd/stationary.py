@@ -32,7 +32,7 @@ from numpyro.infer import MCMC, NUTS, init_to_value
 
 from .config import PSplineConfig
 from .model import (
-    _sample_log_gamma,
+    _sample_smoothing_precision,
     eigen_prior_scale,
     power_floor,
     sample_eigen_coefficients,
@@ -46,8 +46,7 @@ from .splines import (
 
 def _stationary_model(total_power, counts, basis_eig_freq, lam_freq, null_freq, config):
     n_basis = basis_eig_freq.shape[1]
-    phi = _sample_log_gamma("phi_freq", config.alpha_phi, config.beta_phi,
-                            config.phi_log_base_scale)
+    phi = _sample_smoothing_precision("phi_freq", config)
     scale = eigen_prior_scale(
         jnp.asarray(0.0), phi, jnp.zeros(1), lam_freq,
         null_freq[None, :], config,
@@ -217,7 +216,7 @@ def run_stationary_psd_mcmc(
     mcmc.run(random.PRNGKey(random_seed),
              jnp.asarray(total_power), jnp.asarray(counts), jnp.asarray(basis_eig_freq_fit),
              jnp.asarray(lam_f), jnp.asarray(null_f), config,
-             extra_fields=("diverging", "accept_prob", "num_steps", "potential_energy"))
+             extra_fields=("diverging", "accept_prob", "num_steps", "potential_energy", "energy"))
     nuts_runtime_s = time.perf_counter() - nuts_started
 
     samples = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}

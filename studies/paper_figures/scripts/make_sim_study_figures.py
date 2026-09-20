@@ -73,6 +73,8 @@ F_COMMON = np.linspace(0.6, 4.4, 60)
 DEFAULT_FREQ_KNOTS = 8
 KNOT_SENSITIVITY = (6, 8, 10)
 REFERENCE_CACHE_VERSION = 1
+SMOOTHING_PRIOR = "gamma"
+ROUGHNESS_SCALE = 1.0
 
 
 def _time_knots(nt: int) -> int:
@@ -91,6 +93,8 @@ def _configs(nt: int, freq_knots: int) -> tuple[PSplineConfig, PSplineConfig]:
         n_interior_knots_time=kt,
         n_interior_knots_freq=freq_knots,
         freq_knot_strategy="linear",
+        smoothing_prior=SMOOTHING_PRIOR,
+        roughness_scale=ROUGHNESS_SCALE,
     )
     return PSplineConfig(**common), PSplineConfig(**common)
 
@@ -388,7 +392,12 @@ def _render_metrics(
         ax.plot(durations, med(key), marker, color=color, label=label)
         ax.fill_between(durations, q(key, 25), q(key, 75), color=color, alpha=0.18)
 
-    from matplotlib.ticker import FixedLocator, FormatStrFormatter, NullFormatter, NullLocator
+    from matplotlib.ticker import (
+        FixedLocator,
+        FormatStrFormatter,
+        NullFormatter,
+        NullLocator,
+    )
 
     fig, (ax_m, ax_c, ax_w, ax_t) = plt.subplots(4, 1, figsize=(3.6, 6.2),
                                                  sharex=True,
@@ -577,6 +586,8 @@ def _checkpoint_arrays(
         "freq_knots": freq_knots,
         "repeat_start": repeat_start,
         "repeats_target": repeats_target,
+        "smoothing_prior": SMOOTHING_PRIOR,
+        "roughness_scale": ROUGHNESS_SCALE,
         "repeat_ids": np.arange(repeat_start, repeat_start + completed),
         **{f"{key}_samples": np.asarray(rep[key]) for key in METRIC_KEYS},
     }
@@ -601,6 +612,10 @@ def _load_checkpoint(
         "repeats_target": repeats_target,
     }
     with np.load(path) as saved:
+        prior = str(saved["smoothing_prior"]) if "smoothing_prior" in saved else "gamma"
+        scale = float(saved["roughness_scale"]) if "roughness_scale" in saved else 1.0
+        if prior != SMOOTHING_PRIOR or scale != ROUGHNESS_SCALE:
+            raise ValueError(f"Checkpoint {path} uses a different smoothing prior")
         for key, value in expected.items():
             actual = int(saved[key])
             if actual != value:
@@ -669,6 +684,8 @@ def _merge_chunks(
 def main() -> None:
     global FIG_DIR, NF
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--smoothing-prior", choices=["gamma", "half_normal_sigma"], default="gamma")
+    parser.add_argument("--roughness-scale", type=float, default=1.0)
     parser.add_argument("--repeats", type=int, default=100)
     parser.add_argument("--freq-knots", type=int, default=DEFAULT_FREQ_KNOTS,
                         help="Common interior frequency-knot count for both front ends.")
@@ -704,6 +721,9 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, default=None,
                         help="Directory for rendered figures (defaults to the study figures directory).")
     args = parser.parse_args()
+    global SMOOTHING_PRIOR, ROUGHNESS_SCALE
+    SMOOTHING_PRIOR, ROUGHNESS_SCALE = args.smoothing_prior, args.roughness_scale
+    PSplineConfig(smoothing_prior=SMOOTHING_PRIOR, roughness_scale=ROUGHNESS_SCALE)
 
     if args.output_dir is not None:
         FIG_DIR = args.output_dir.resolve()
