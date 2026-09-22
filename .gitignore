@@ -1,9 +1,10 @@
-
+studies/
 studies/results/ls2/coarse_graining_16384/
 *.nc
-
+*.txt
+*.md
 *.json
-
+*.csv
 *.h5
 *.png
 # Python-generated files
